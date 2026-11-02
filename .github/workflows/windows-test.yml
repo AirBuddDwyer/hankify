@@ -1,12 +1,12 @@
 # Installs the Windows package from scratch on a clean Windows runner (no GPU, so the CPU path) and renders a
 # short clip through the whole pipeline with a dummy voice. Run it by hand from the Actions tab, or by pushing
-# changes to the windows/ installer.
+# changes to main.
 name: Windows package test
 
 on:
   workflow_dispatch:
   push:
-    branches: [windows]
+    branches: [main]
     paths: ["windows/**", "song-pipeline/**", "hankify/**", "*.bat", ".github/workflows/windows-test.yml"]
 
 jobs:
