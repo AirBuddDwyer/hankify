@@ -1,0 +1,121 @@
+diff --git a/infer/vc/modules.py b/infer/vc/modules.py
+index 0fd9354..a55b088 100644
+--- a/infer/vc/modules.py
++++ b/infer/vc/modules.py
+@@ -1,3 +1,5 @@
++import os
++import time
+ import traceback
+ import logging
+ 
+@@ -8,6 +10,11 @@ import soundfile as sf
+ import torch
+ from io import BytesIO
+ 
++# Single/one-click inference (unlike batch inference) has no persistent output
++# folder by default - Gradio just holds the result in a temp file. If the env var
++# RVC_AUTOSAVE_DIR is set, a named copy of each result is auto-saved there.
++SINGLE_INFERENCE_AUTOSAVE_DIR = os.environ.get("RVC_AUTOSAVE_DIR", "")
++
+ from infer.audio import load_audio, wav2
+ from infer.module.models import (
+     SynthesizerTrnMs256NSFsid,
+@@ -147,6 +154,8 @@ class VC:
+                     else:
+                         self.net_g = SynthesizerTrnMs768NSFsid_nono(*self.cpt["config"])
+                 del self.net_g, self.cpt
++                self.net_g = None
++                self.cpt = None
+                 if torch.cuda.is_available():
+                     torch.cuda.empty_cache()
+             return (
+@@ -234,6 +243,7 @@ class VC:
+         resample_sr,
+         rms_mix_rate,
+         protect,
++        autosave=True,
+     ):
+         if input_audio_path is None:
+             return inference_status("单次推理", "等待输入", i18n("请上传音频文件")), None
+@@ -281,6 +291,29 @@ class VC:
+                 tgt_sr = resample_sr
+             else:
+                 tgt_sr = self.tgt_sr
++
++            if autosave and SINGLE_INFERENCE_AUTOSAVE_DIR:
++                try:
++                    os.makedirs(SINGLE_INFERENCE_AUTOSAVE_DIR, exist_ok=True)
++                    input_base = os.path.splitext(os.path.basename(input_audio_path))[0]
++                    model_base = os.path.splitext(os.path.basename(sid))[0] if sid else "model"
++                    out_name = "%s [%s] %s.wav" % (
++                        input_base,
++                        model_base,
++                        time.strftime("%Y%m%d-%H%M%S"),
++                    )
++                    sf.write(
++                        os.path.join(SINGLE_INFERENCE_AUTOSAVE_DIR, out_name),
++                        audio_opt,
++                        tgt_sr,
++                    )
++                except Exception:
++                    logger.warning(
++                        "Failed to auto-save single-inference output to %s",
++                        SINGLE_INFERENCE_AUTOSAVE_DIR,
++                        exc_info=True,
++                    )
++
+             index_info = (
+                 "%s：%s" % (i18n("索引"), file_index)
+                 if os.path.exists(file_index)
+diff --git a/infer/vc/pipeline.py b/infer/vc/pipeline.py
+index 2aa3235..b4ce0e1 100644
+--- a/infer/vc/pipeline.py
++++ b/infer/vc/pipeline.py
+@@ -127,6 +127,19 @@ class Pipeline(object):
+             f0[uv] = np.interp(np.where(uv)[0], np.where(~uv)[0], f0[~uv])
+         except Exception:
+             traceback.print_exc()
++        # Optional octave fold (env RVC_F0_CENTER=<Hz>): shift each voiced frame by whole octaves toward this centre, so a
++        # voice follows ONE melody line when the source stem has two singers an octave apart (duets). No-op when unset.
++        _center = os.environ.get("RVC_F0_CENTER")
++        if _center:
++            _v = f0 > 0
++            f0[_v] = f0[_v] * np.power(2.0, np.rint(np.log2(float(_center) / f0[_v])))
++        # Optional one-way lift (env RVC_F0_FLOOR=<Hz>): voiced frames below this go up whole octaves until they reach
++        # it; nothing is ever lowered. For a singer whose deep layer is below the voice model's range while the normal
++        # register is fine (Nate Dogg's octave-down double on Shake That, 2026-10-23). No-op when unset.
++        _floor = os.environ.get("RVC_F0_FLOOR")
++        if _floor:
++            _low = (f0 > 0) & (f0 < float(_floor))
++            f0[_low] = f0[_low] * np.power(2.0, np.ceil(np.log2(float(_floor) / f0[_low])))
+         f0 *= pow(2, f0_up_key / 12)
+         f0bak = f0.copy()
+         f0_mel = 1127 * np.log(1 + f0 / 700)
+@@ -202,11 +215,23 @@ class Pipeline(object):
+             )
+         t1 = ttime()
+         p_len = audio0.shape[0] // self.window
++        if pitch is not None and pitchf is not None:
++            p_len = min(p_len, pitch.shape[1])  # the frames the caller trims and stitches
++        # HuBERT's 20 ms hop doubled to 10 ms often comes up 1-2 frames short of p_len. Upstream truncated the
++        # output to match, so every ~30-38 s internal segment came back 10-20 ms short and the vocal drifted
++        # ahead of the music (~140 ms by the end of a 9-minute song; 2026-10-23). Repeat the last frame
++        # instead, so each segment is exactly as long as its input.
+         if feats.shape[1] < p_len:
+-            p_len = feats.shape[1]
+-            if pitch is not None and pitchf is not None:
+-                pitch = pitch[:, :p_len]
+-                pitchf = pitchf[:, :p_len]
++            extra = p_len - feats.shape[1]
++            feats = torch.cat([feats, feats[:, -1:].expand(-1, extra, -1)], 1)
++            if protect < 0.5 and pitch is not None and pitchf is not None:
++                feats0 = torch.cat([feats0, feats0[:, -1:].expand(-1, extra, -1)], 1)
++        feats = feats[:, :p_len]
++        if protect < 0.5 and pitch is not None and pitchf is not None:
++            feats0 = feats0[:, :p_len]
++        if pitch is not None and pitchf is not None:
++            pitch = pitch[:, :p_len]
++            pitchf = pitchf[:, :p_len]
+ 
+         if protect < 0.5 and pitch is not None and pitchf is not None:
+             pitchff = pitchf.clone()

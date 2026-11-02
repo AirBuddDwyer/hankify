@@ -1,0 +1,7 @@
+{
+  "rvc_dir": "~/RVC-WebUI",
+  "uvr_dir": "~/ultimatevocalremovergui",
+  "output_dir": "~/Music/hankify",
+  "runs_dir": "~/.cache/hankifier/pipeline_runs",
+  "fallback_image": "~/Pictures/default_cover.jpg"
+}

@@ -1,0 +1,97 @@
+{
+  "mode": "new",
+  "_mode": "new = combine_new.py, the guide chain (2026-10-23). old = this file's chain below. Per run: COMBINE_WAY=old.",
+  "_comment": "Processing applied to every converted (RVC) vocal before it is mixed with the instrumental, by combine_stage.py. 'chain' runs top to bottom (serial compression per mastering.com/vocal-compression-how-to-compress-vocals), then the loudness match, then a master limiter on the mix. Edit values here; no code change needed. Skip all of it with pipeline.py --no-vocal-fx.",
+  "chain": [
+    {
+      "type": "highpass",
+      "_what": "surgical EQ: rumble",
+      "freq_hz": 80
+    },
+    {
+      "type": "eq",
+      "_what": "surgical EQ: mud/boxiness",
+      "freq_hz": 280,
+      "q": 1.0,
+      "gain_db": -2.5
+    },
+    {
+      "type": "compressor",
+      "_what": "tonal compression (slow attack, low ratio)",
+      "threshold_db": -24,
+      "ratio": 1.5,
+      "attack_ms": 15,
+      "release_ms": 40,
+      "knee_db": 6,
+      "makeup_db": 2
+    },
+    {
+      "type": "eq",
+      "_what": "tonal EQ: presence / intelligibility",
+      "freq_hz": 3000,
+      "q": 0.9,
+      "gain_db": 3.0
+    },
+    {
+      "type": "highshelf",
+      "_what": "tonal EQ: air",
+      "freq_hz": 10000,
+      "gain_db": 2.0
+    },
+    {
+      "type": "compressor",
+      "_what": "dynamic compression (catch peaks)",
+      "threshold_db": -24,
+      "ratio": 2.0,
+      "attack_ms": 5,
+      "release_ms": 20,
+      "knee_db": 1,
+      "makeup_db": 1
+    },
+    {
+      "type": "deesser",
+      "_what": "tame S sounds (4-7 kHz) brought up by the presence/air boosts",
+      "intensity": 0.5,
+      "max_reduction": 0.5,
+      "freq": 0.5
+    },
+    {
+      "type": "highshelf",
+      "_what": "final EQ: gentle high-shelf cut at the end of the chain (2026-10-21, made standard after the Janice STFU v2 test)",
+      "freq_hz": 8000,
+      "gain_db": -2.0
+    }
+  ],
+  "loudness": {
+    "_what": "Default (no per-song boost given): gain the vocal after the chain so its loudness matches the ORIGINAL vocal stem, plus offset_db, clamped to max_boost_db. A per-song boost (Hankify 'Vocal boost (dB)' box, pipeline.py --vocal-boost-db, or vocalboost re-mix) replaces this with that exact number.",
+    "match_original": true,
+    "offset_db": 0.0,
+    "max_boost_db": 18.0
+  },
+  "reverb": {
+    "_what": "Short-tail vocal reverb. ON BY DEFAULT since 2026-10-07 (user: 'until i find a song where it ruins things') at default_percent; per-song off = --vocal-reverb 0 (Hankify: untick 'Add vocal reverb'; vocalboost --no-reverb); per-song amount = --vocal-reverb PCT. IR = decaying stereo pink noise.",
+    "default_percent": 8,
+    "decay_s": 0.8,
+    "predelay_ms": 18,
+    "highpass_hz": 250,
+    "lowpass_hz": 6500,
+    "default_on": true
+  },
+  "master_loudness": {
+    "_what": "Final two-pass EBU R128 loudnorm of the whole mix (user 2026-10-08: YouTube standard). Opt out per run: combine_stage --no-loudnorm. linear=true keeps dynamics when the target is reachable within the true-peak ceiling.",
+    "enabled": true,
+    "target_lufs": -14.0,
+    "true_peak_db": -1.0,
+    "lra": 11.0
+  },
+  "rider": {
+    "_what": "Fader riding before the chain. ON by default: engine \"waves\" = the real Waves Vocal Rider (Mono) run headless via ~/.local/share/vocal-rider-host (falls back to the native vocal_rider.py if it fails); engine \"native\" = vocal_rider.py only. Skip per run with combine_stage --no-vocal-rider.",
+    "enabled": true,
+    "up_db": 6,
+    "down_db": 8,
+    "strength": 1.0,
+    "engine": "waves",
+    "range_db": 6,
+    "attack": "Slow"
+  }
+}

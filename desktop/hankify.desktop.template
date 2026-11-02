@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Name=Hankify
+Comment=Drag a song in, get it back in another voice
+Exec=@REPO@/run_hankify.sh
+Path=@REPO@/hankify
+Terminal=false
+Type=Application
+Categories=AudioVideo;Audio;
+StartupNotify=true

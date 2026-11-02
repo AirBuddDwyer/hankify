@@ -1,0 +1,1576 @@
+diff --git i/UVR.py w/UVR.py
+index 65ef926..40179b6 100644
+--- i/UVR.py
++++ w/UVR.py
+@@ -39,7 +39,7 @@ from gui_data.constants import *
+ from gui_data.app_size_values import *
+ from gui_data.error_handling import error_text, error_dialouge
+ from gui_data.old_data_check import file_check, remove_unneeded_yamls, remove_temps
+-from gui_data.tkinterdnd2 import TkinterDnD, DND_FILES
++from tkinterdnd2 import TkinterDnD, DND_FILES
+ from lib_v5.vr_network.model_param_init import ModelParameters
+ from kthread import KThread
+ from lib_v5 import spec_utils
+@@ -1287,9 +1287,17 @@ class MainWindow(TkinterDnD.Tk if is_dnd_compatible else tk.Tk):
+     def __init__(self):
+         #Run the __init__ method on the tk.Tk class
+         super().__init__()
+-        
++
+         self.set_app_font()
+ 
++        # Background threads (KThread workers) must never call Tk/Tcl APIs
++        # directly - even self.after() touches the interpreter from whatever
++        # thread calls it. They push plain callables here instead, and this
++        # poller (which only ever reschedules itself from the main thread)
++        # drains the queue and runs them safely on the main thread.
++        self.ui_update_queue = queue.Queue()
++        self.after(50, self._process_ui_queue)
++
+         style = ttk.Style(self)
+         style.map('TCombobox', selectbackground=[('focus', '#0c0c0c')], selectforeground=[('focus', 'white')])
+         style.configure('TCombobox', selectbackground='#0c0c0c')
+@@ -5128,15 +5136,34 @@ class MainWindow(TkinterDnD.Tk if is_dnd_compatible else tk.Tk):
+                     os.remove(saved_path)
+                     callback(selection)
+ 
+-    #--Download Center Methods--    
++    #--Thread-safe UI dispatch--
++
++    def _process_ui_queue(self):
++        """Drains callables queued by background threads and runs them here, on the main thread."""
++        try:
++            while True:
++                func = self.ui_update_queue.get_nowait()
++                try:
++                    func()
++                except Exception as e:
++                    print(e)
++        except queue.Empty:
++            pass
++        self.after(50, self._process_ui_queue)
++
++    def _run_on_main(self, func):
++        """Background threads call this instead of touching Tk/self.after() directly."""
++        self.ui_update_queue.put(func)
++
++    #--Download Center Methods--
+ 
+     def online_data_refresh(self, user_refresh=True, confirmation_box=False, refresh_list_Button=False, is_start_up=False, is_download_complete=False):
+         """Checks for application updates"""
+         
+         def online_check():
+             if not is_start_up:
+-                self.app_update_status_Text_var.set(LOADING_VERSION_INFO_TEXT)
+-                self.app_update_button_Text_var.set(CHECK_FOR_UPDATES_TEXT)
++                self._run_on_main(lambda: self.app_update_status_Text_var.set(LOADING_VERSION_INFO_TEXT))
++                self._run_on_main(lambda: self.app_update_button_Text_var.set(CHECK_FOR_UPDATES_TEXT))
+ 
+             is_new_update = False
+             try:
+@@ -5157,12 +5184,14 @@ class MainWindow(TkinterDnD.Tk if is_dnd_compatible else tk.Tk):
+                     print(e)
+ 
+                 if user_refresh:
+-                    self.download_list_state()
+-                    for widget in self.download_center_Buttons:
+-                        widget.configure(state=tk.NORMAL)
+-                    
++                    def _apply_user_refresh_ui():
++                        self.download_list_state()
++                        for widget in self.download_center_Buttons:
++                            widget.configure(state=tk.NORMAL)
++                    self._run_on_main(_apply_user_refresh_ui)
++
+                 if refresh_list_Button:
+-                    self.download_progress_info_var.set('Download List Refreshed!')
++                    self._run_on_main(lambda: self.download_progress_info_var.set('Download List Refreshed!'))
+ 
+                 if OPERATING_SYSTEM=="Darwin":
+                     self.lastest_version = self.online_data["current_version_mac"]
+@@ -5172,53 +5201,60 @@ class MainWindow(TkinterDnD.Tk if is_dnd_compatible else tk.Tk):
+                     self.lastest_version = self.online_data["current_version"]
+                     
+                 if self.lastest_version == current_patch and not is_start_up:
+-                    self.app_update_status_Text_var.set('UVR Version Current')
++                    self._run_on_main(lambda: self.app_update_status_Text_var.set('UVR Version Current'))
+                 else:
+                     is_new_update = True
+                     is_beta_version = True if self.lastest_version == PREVIOUS_PATCH_WIN and BETA_VERSION in current_patch else False
+-                    
++
+                     if not is_start_up:
+-                        if is_beta_version:
+-                            self.app_update_status_Text_var.set(f"Roll Back: {self.lastest_version}")
+-                            self.app_update_button_Text_var.set(ROLL_BACK_TEXT)
+-                        else:
+-                            self.app_update_status_Text_var.set(f"Update Found: {self.lastest_version}")
+-                            self.app_update_button_Text_var.set('Click Here to Update')
+-                        
+-                        if OPERATING_SYSTEM == "Windows":
+-                            self.download_update_link_var.set('{}{}{}'.format(UPDATE_REPO, self.lastest_version, application_extension))
+-                            self.download_update_path_var.set(os.path.join(BASE_PATH, f'{self.lastest_version}{application_extension}'))
+-                        elif OPERATING_SYSTEM == "Darwin":
+-                            self.download_update_link_var.set(UPDATE_MAC_ARM_REPO if SYSTEM_PROC == ARM or ARM in SYSTEM_ARCH else UPDATE_MAC_X86_64_REPO)
+-                        elif OPERATING_SYSTEM == "Linux":
+-                            self.download_update_link_var.set(UPDATE_LINUX_REPO)
+-                    
++                        def _apply_update_found_ui():
++                            if is_beta_version:
++                                self.app_update_status_Text_var.set(f"Roll Back: {self.lastest_version}")
++                                self.app_update_button_Text_var.set(ROLL_BACK_TEXT)
++                            else:
++                                self.app_update_status_Text_var.set(f"Update Found: {self.lastest_version}")
++                                self.app_update_button_Text_var.set('Click Here to Update')
++
++                            if OPERATING_SYSTEM == "Windows":
++                                self.download_update_link_var.set('{}{}{}'.format(UPDATE_REPO, self.lastest_version, application_extension))
++                                self.download_update_path_var.set(os.path.join(BASE_PATH, f'{self.lastest_version}{application_extension}'))
++                            elif OPERATING_SYSTEM == "Darwin":
++                                self.download_update_link_var.set(UPDATE_MAC_ARM_REPO if SYSTEM_PROC == ARM or ARM in SYSTEM_ARCH else UPDATE_MAC_X86_64_REPO)
++                            elif OPERATING_SYSTEM == "Linux":
++                                self.download_update_link_var.set(UPDATE_LINUX_REPO)
++                        self._run_on_main(_apply_update_found_ui)
++
+                     if not user_refresh:
+                         if not is_beta_version and not self.lastest_version == current_patch:
+-                            self.command_Text.write(NEW_UPDATE_FOUND_TEXT(self.lastest_version))
++                            self._run_on_main(lambda: self.command_Text.write(NEW_UPDATE_FOUND_TEXT(self.lastest_version)))
+ 
+ 
+-                is_update_params = self.is_auto_update_model_params if is_start_up else self.is_auto_update_model_params_var.get()
+-                
+-                if is_update_params and is_start_up or is_download_complete:
+-                    self.download_model_settings()
+-                    
++                def _maybe_update_model_settings():
++                    is_update_params = self.is_auto_update_model_params if is_start_up else self.is_auto_update_model_params_var.get()
++                    if is_update_params and is_start_up or is_download_complete:
++                        self.download_model_settings()
++                self._run_on_main(_maybe_update_model_settings)
++
+                 # if is_download_complete:
+                 #     self.download_model_settings()
+ 
+             except Exception as e:
+-                self.offline_state_set(is_start_up)
+                 is_new_update = False
+-                
+-                if user_refresh:
+-                    self.download_list_state(disable_only=True)
+-                    for widget in self.download_center_Buttons:
+-                        widget.configure(state=tk.DISABLED)
+-                        
+-                try:
+-                    self.error_log_var.set(error_text('Online Data Refresh', e))
+-                except Exception as e:
+-                    print(e)
++                error_for_ui = e
++
++                def _apply_offline_ui():
++                    self.offline_state_set(is_start_up)
++
++                    if user_refresh:
++                        self.download_list_state(disable_only=True)
++                        for widget in self.download_center_Buttons:
++                            widget.configure(state=tk.DISABLED)
++
++                    try:
++                        self.error_log_var.set(error_text('Online Data Refresh', error_for_ui))
++                    except Exception as e2:
++                        print(e2)
++                self._run_on_main(_apply_offline_ui)
+ 
+             return is_new_update
+             
+@@ -5455,50 +5491,62 @@ class MainWindow(TkinterDnD.Tk if is_dnd_compatible else tk.Tk):
+         self.download_list_state(reset=False, disable_only=True)
+         self.stop_download_Button_ENABLE()
+         self.disable_tabs()
+-        
++
++        # Read everything push_download() needs from Tk variables here, on the
++        # main thread, so the background thread never touches Tk directly.
++        select_download = self.select_download_var.get()
++        update_link = self.download_update_link_var.get()
++        update_path = self.download_update_path_var.get()
++        link_path = self.download_link_path_var.get()
++        save_path = self.download_save_path_var.get()
++
+         def download_progress_bar(current, total, model=80):
+             progress = ('%s' % (100 * current // total))
+-            self.download_progress_bar_var.set(int(progress))
+-            self.download_progress_percent_var.set(progress + ' %')
+-            
++            self._run_on_main(lambda: self.download_progress_bar_var.set(int(progress)))
++            self._run_on_main(lambda: self.download_progress_percent_var.set(progress + ' %'))
++
+         def push_download():
+             self.is_download_thread_active = True
+             try:
+                 if is_update_app:
+-                    self.download_progress_info_var.set(DOWNLOADING_UPDATE)
+-                    if os.path.isfile(self.download_update_path_var.get()):
+-                        self.download_progress_info_var.set(FILE_EXISTS)
++                    self._run_on_main(lambda: self.download_progress_info_var.set(DOWNLOADING_UPDATE))
++                    if os.path.isfile(update_path):
++                        self._run_on_main(lambda: self.download_progress_info_var.set(FILE_EXISTS))
+                     else:
+-                        wget.download(self.download_update_link_var.get(), self.download_update_path_var.get(), bar=download_progress_bar)
+-                        
+-                    self.download_post_action(DOWNLOAD_UPDATE_COMPLETE)
++                        wget.download(update_link, update_path, bar=download_progress_bar)
++
++                    self._run_on_main(lambda: self.download_post_action(DOWNLOAD_UPDATE_COMPLETE))
+                 else:
+-                    if self.select_download_var.get() == DEMUCS_ARCH_TYPE and is_demucs_newer:
++                    if select_download == DEMUCS_ARCH_TYPE and is_demucs_newer:
+                         for model_num, model_data in enumerate(self.download_demucs_newer_models, start=1):
+-                            self.download_progress_info_var.set('{} {}/{}...'.format(DOWNLOADING_ITEM, model_num, len(self.download_demucs_newer_models)))
++                            self._run_on_main(lambda model_num=model_num: self.download_progress_info_var.set('{} {}/{}...'.format(DOWNLOADING_ITEM, model_num, len(self.download_demucs_newer_models))))
+                             if os.path.isfile(model_data[0]):
+                                 continue
+                             else:
+                                 wget.download(model_data[1], model_data[0], bar=download_progress_bar)
+                     else:
+-                        self.download_progress_info_var.set(SINGLE_DOWNLOAD)
+-                        if os.path.isfile(self.download_save_path_var.get()):
+-                            self.download_progress_info_var.set(FILE_EXISTS)
++                        self._run_on_main(lambda: self.download_progress_info_var.set(SINGLE_DOWNLOAD))
++                        if os.path.isfile(save_path):
++                            self._run_on_main(lambda: self.download_progress_info_var.set(FILE_EXISTS))
+                         else:
+-                            wget.download(self.download_link_path_var.get(), self.download_save_path_var.get(), bar=download_progress_bar)
+-                            
+-                    self.download_post_action(DOWNLOAD_COMPLETE)
+-                
++                            wget.download(link_path, save_path, bar=download_progress_bar)
++
++                    self._run_on_main(lambda: self.download_post_action(DOWNLOAD_COMPLETE))
++
+             except Exception as e:
+-                self.error_log_var.set(error_text(DOWNLOADING_ITEM, e))
+-                self.download_progress_info_var.set(DOWNLOAD_FAILED)
+-                
+-                if type(e).__name__ == 'URLError':
+-                    self.offline_state_set()
+-                else:
+-                    self.download_progress_percent_var.set(f"{type(e).__name__}")
+-                    self.download_post_action(DOWNLOAD_FAILED)
+-                          
++                error_for_ui = e
++
++                def _apply_download_error_ui():
++                    self.error_log_var.set(error_text(DOWNLOADING_ITEM, error_for_ui))
++                    self.download_progress_info_var.set(DOWNLOAD_FAILED)
++
++                    if type(error_for_ui).__name__ == 'URLError':
++                        self.offline_state_set()
++                    else:
++                        self.download_progress_percent_var.set(f"{type(error_for_ui).__name__}")
++                        self.download_post_action(DOWNLOAD_FAILED)
++                self._run_on_main(_apply_download_error_ui)
++
+         self.active_download_thread = KThread(target=push_download)
+         self.active_download_thread.start()
+ 
+@@ -6217,8 +6265,8 @@ class MainWindow(TkinterDnD.Tk if is_dnd_compatible else tk.Tk):
+ 
+     def process_button_init(self):
+         self.auto_save()
+-        self.conversion_Button_Text_var.set(WAIT_PROCESSING)
+-        self.conversion_Button.configure(state=tk.DISABLED)
++        self._run_on_main(lambda: self.conversion_Button_Text_var.set(WAIT_PROCESSING))
++        self._run_on_main(lambda: self.conversion_Button.configure(state=tk.DISABLED))
+         self.command_Text.clear()
+ 
+     def process_get_baseText(self, total_files, file_num, is_dual=False):
+@@ -6240,9 +6288,8 @@ class MainWindow(TkinterDnD.Tk if is_dnd_compatible else tk.Tk):
+         progress = base * self.iteration - base
+         progress += base * step
+ 
+-        self.progress_bar_main_var.set(progress)
+-        
+-        self.conversion_Button_Text_var.set(f'Process Progress: {int(progress)}%')
++        self._run_on_main(lambda: self.progress_bar_main_var.set(progress))
++        self._run_on_main(lambda: self.conversion_Button_Text_var.set(f'Process Progress: {int(progress)}%'))
+ 
+     def confirm_stop_process(self):
+         """Asks for confirmation before halting active process"""
+@@ -6263,28 +6310,32 @@ class MainWindow(TkinterDnD.Tk if is_dnd_compatible else tk.Tk):
+ 
+     def process_end(self, error=None):
+         """End of process actions"""
+-        
++
+         self.auto_save()
+         self.cached_sources_clear()
+         self.clear_cache_torch = True
+-        self.conversion_Button_Text_var.set(START_PROCESSING)
+-        self.conversion_Button.configure(state=tk.NORMAL)
+-        self.progress_bar_main_var.set(0)
+ 
+-        if error:
+-            error_message_box_text = f'{error_dialouge(error)}{ERROR_OCCURED[1]}'
+-            confirm = messagebox.askyesno(parent=root,
+-                                             title=ERROR_OCCURED[0],
+-                                             message=error_message_box_text)
+-            
+-            if confirm:
+-                self.is_confirm_error_var.set(True)
++        def _apply_process_end_ui():
++            self.conversion_Button_Text_var.set(START_PROCESSING)
++            self.conversion_Button.configure(state=tk.NORMAL)
++            self.progress_bar_main_var.set(0)
++
++            if error:
++                error_message_box_text = f'{error_dialouge(error)}{ERROR_OCCURED[1]}'
++                confirm = messagebox.askyesno(parent=root,
++                                                 title=ERROR_OCCURED[0],
++                                                 message=error_message_box_text)
++
++                if confirm:
++                    self.is_confirm_error_var.set(True)
++                    self.clear_cache_torch = True
++
+                 self.clear_cache_torch = True
+ 
+-            self.clear_cache_torch = True
+-            
+-            if MODEL_MISSING_CHECK in error_message_box_text: 
+-                self.update_checkbox_text()
++                if MODEL_MISSING_CHECK in error_message_box_text:
++                    self.update_checkbox_text()
++
++        self._run_on_main(_apply_process_end_ui)
+  
+     def process_tool_start(self):
+         """Start the conversion for all the given mp3 and wav files"""
+@@ -6669,21 +6720,29 @@ class MainWindow(TkinterDnD.Tk if is_dnd_compatible else tk.Tk):
+             if inputPath_total_len == 1 and not is_verified_audio:
+                 self.command_Text.write(f'{error_text_console}\n{PROCESS_FAILED}')
+                 self.command_Text.write(time_elapsed())
+-                playsound(FAIL_CHIME) if self.is_task_complete_var.get() else None
++                self._run_on_main(lambda: playsound(FAIL_CHIME) if self.is_task_complete_var.get() else None)
+             else:
+                 set_progress_bar(1.0)
+                 self.command_Text.write(PROCESS_COMPLETE)
+                 self.command_Text.write(time_elapsed())
+-                playsound(COMPLETE_CHIME) if self.is_task_complete_var.get() else None
+-                
++                self._run_on_main(lambda: playsound(COMPLETE_CHIME) if self.is_task_complete_var.get() else None)
++
+             self.process_end()
+-                        
++
+         except Exception as e:
+-            self.error_log_var.set("{}{}".format(error_text(self.chosen_process_method_var.get(), e), self.get_settings_list()))
++            error_for_ui = e
++
++            def _apply_process_failed_ui():
++                self.error_log_var.set("{}{}".format(
++                    error_text(self.chosen_process_method_var.get(), error_for_ui),
++                    self.get_settings_list(),
++                ))
++                playsound(FAIL_CHIME) if self.is_task_complete_var.get() else None
++            self._run_on_main(_apply_process_failed_ui)
++
+             self.command_Text.write(f'\n\n{PROCESS_FAILED}')
+             self.command_Text.write(time_elapsed())
+-            playsound(FAIL_CHIME) if self.is_task_complete_var.get() else None
+-            self.process_end(error=e)
++            self.process_end(error=error_for_ui)
+ 
+     #--Varible Methods--
+ 
+diff --git i/models/MDX_Net_Models/model_data/model_data.json w/models/MDX_Net_Models/model_data/model_data.json
+index dc33f4d..497bf85 100644
+--- i/models/MDX_Net_Models/model_data/model_data.json
++++ w/models/MDX_Net_Models/model_data/model_data.json
+@@ -1,351 +1,481 @@
+-{
+-    "0ddfc0eb5792638ad5dc27850236c246": {
+-        "compensate": 1.035,
+-        "mdx_dim_f_set": 2048,
+-        "mdx_dim_t_set": 8,
+-        "mdx_n_fft_scale_set": 6144,
+-        "primary_stem": "Vocals"
+-    },
+-    "26d308f91f3423a67dc69a6d12a8793d": {
+-        "compensate": 1.035,
+-        "mdx_dim_f_set": 2048,
+-        "mdx_dim_t_set": 9,
+-        "mdx_n_fft_scale_set": 8192,
+-        "primary_stem": "Other"
+-    },
+-    "2cdd429caac38f0194b133884160f2c6": {
+-        "compensate": 1.045,
+-        "mdx_dim_f_set": 3072,
+-        "mdx_dim_t_set": 8,
+-        "mdx_n_fft_scale_set": 7680,
+-        "primary_stem": "Instrumental"
+-    },
+-    "2f5501189a2f6db6349916fabe8c90de": {
+-        "compensate": 1.035,
+-        "mdx_dim_f_set": 2048,
+-        "mdx_dim_t_set": 8,
+-        "mdx_n_fft_scale_set": 6144,
+-        "primary_stem": "Vocals",
+-        "is_karaoke": true
+-    },
+-    "398580b6d5d973af3120df54cee6759d": {
+-        "compensate": 1.75,
+-        "mdx_dim_f_set": 3072,
+-        "mdx_dim_t_set": 8,
+-        "mdx_n_fft_scale_set": 7680,
+-        "primary_stem": "Vocals"
+-    },
+-    "488b3e6f8bd3717d9d7c428476be2d75": {
+-        "compensate": 1.035,
+-        "mdx_dim_f_set": 3072,
+-        "mdx_dim_t_set": 8,
+-        "mdx_n_fft_scale_set": 7680,
+-        "primary_stem": "Instrumental"
+-    },
+-    "4910e7827f335048bdac11fa967772f9": {
+-        "compensate": 1.035,
+-        "mdx_dim_f_set": 2048,
+-        "mdx_dim_t_set": 7,
+-        "mdx_n_fft_scale_set": 4096,
+-        "primary_stem": "Drums"
+-    },
+-    "53c4baf4d12c3e6c3831bb8f5b532b93": {
+-        "compensate": 1.043,
+-        "mdx_dim_f_set": 3072,
+-        "mdx_dim_t_set": 8,
+-        "mdx_n_fft_scale_set": 7680,
+-        "primary_stem": "Vocals"
+-    },
+-    "5d343409ef0df48c7d78cce9f0106781": {
+-        "compensate": 1.075,
+-        "mdx_dim_f_set": 3072,
+-        "mdx_dim_t_set": 8,
+-        "mdx_n_fft_scale_set": 7680,
+-        "primary_stem": "Vocals"
+-    },
+-    "5f6483271e1efb9bfb59e4a3e6d4d098": {
+-        "compensate": 1.035,
+-        "mdx_dim_f_set": 2048,
+-        "mdx_dim_t_set": 9,
+-        "mdx_n_fft_scale_set": 6144,
+-        "primary_stem": "Vocals"
+-    },
+-    "65ab5919372a128e4167f5e01a8fda85": {
+-        "compensate": 1.035,
+-        "mdx_dim_f_set": 2048,
+-        "mdx_dim_t_set": 8,
+-        "mdx_n_fft_scale_set": 8192,
+-        "primary_stem": "Other"
+-    },
+-    "6703e39f36f18aa7855ee1047765621d": {
+-        "compensate": 1.035,
+-        "mdx_dim_f_set": 2048,
+-        "mdx_dim_t_set": 9,
+-        "mdx_n_fft_scale_set": 16384,
+-        "primary_stem": "Bass"
+-    },
+-    "6b31de20e84392859a3d09d43f089515": {
+-        "compensate": 1.035,
+-        "mdx_dim_f_set": 2048,
+-        "mdx_dim_t_set": 8,
+-        "mdx_n_fft_scale_set": 6144,
+-        "primary_stem": "Vocals"
+-    },
+-    "867595e9de46f6ab699008295df62798": {
+-        "compensate": 1.03,
+-        "mdx_dim_f_set": 3072,
+-        "mdx_dim_t_set": 8,
+-        "mdx_n_fft_scale_set": 7680,
+-        "primary_stem": "Vocals"
+-    },
+-    "a3cd63058945e777505c01d2507daf37": {
+-        "compensate": 1.03,
+-        "mdx_dim_f_set": 2048,
+-        "mdx_dim_t_set": 8,
+-        "mdx_n_fft_scale_set": 6144,
+-        "primary_stem": "Vocals"
+-    },
+-    "b33d9b3950b6cbf5fe90a32608924700": {
+-        "compensate": 1.03,
+-        "mdx_dim_f_set": 3072,
+-        "mdx_dim_t_set": 8,
+-        "mdx_n_fft_scale_set": 7680,
+-        "primary_stem": "Vocals"
+-    },
+-    "c3b29bdce8c4fa17ec609e16220330ab": {
+-        "compensate": 1.035,
+-        "mdx_dim_f_set": 2048,
+-        "mdx_dim_t_set": 8,
+-        "mdx_n_fft_scale_set": 16384,
+-        "primary_stem": "Bass"
+-    },
+-    "ceed671467c1f64ebdfac8a2490d0d52": {
+-        "compensate": 1.035,
+-        "mdx_dim_f_set": 3072,
+-        "mdx_dim_t_set": 8,
+-        "mdx_n_fft_scale_set": 7680,
+-        "primary_stem": "Instrumental"
+-    },
+-    "d2a1376f310e4f7fa37fb9b5774eb701": {
+-        "compensate": 1.035,
+-        "mdx_dim_f_set": 3072,
+-        "mdx_dim_t_set": 8,
+-        "mdx_n_fft_scale_set": 7680,
+-        "primary_stem": "Instrumental"
+-    },
+-    "d7bff498db9324db933d913388cba6be": {
+-        "compensate": 1.035,
+-        "mdx_dim_f_set": 2048,
+-        "mdx_dim_t_set": 8,
+-        "mdx_n_fft_scale_set": 6144,
+-        "primary_stem": "Vocals"
+-    },
+-    "d94058f8c7f1fae4164868ae8ae66b20": {
+-        "compensate": 1.035,
+-        "mdx_dim_f_set": 2048,
+-        "mdx_dim_t_set": 8,
+-        "mdx_n_fft_scale_set": 6144,
+-        "primary_stem": "Vocals"
+-    },
+-    "dc41ede5961d50f277eb846db17f5319": {
+-        "compensate": 1.035,
+-        "mdx_dim_f_set": 2048,
+-        "mdx_dim_t_set": 9,
+-        "mdx_n_fft_scale_set": 4096,
+-        "primary_stem": "Drums"
+-    },
+-    "e5572e58abf111f80d8241d2e44e7fa4": {
+-        "compensate": 1.028,
+-        "mdx_dim_f_set": 3072,
+-        "mdx_dim_t_set": 8,
+-        "mdx_n_fft_scale_set": 7680,
+-        "primary_stem": "Instrumental"
+-    },
+-    "e7324c873b1f615c35c1967f912db92a": {
+-        "compensate": 1.03,
+-        "mdx_dim_f_set": 3072,
+-        "mdx_dim_t_set": 8,
+-        "mdx_n_fft_scale_set": 7680,
+-        "primary_stem": "Vocals"
+-    },
+-    "1c56ec0224f1d559c42fd6fd2a67b154": {
+-        "compensate": 1.025,
+-        "mdx_dim_f_set": 2048,
+-        "mdx_dim_t_set": 8,
+-        "mdx_n_fft_scale_set": 5120,
+-        "primary_stem": "Instrumental"
+-    },
+-    "f2df6d6863d8f435436d8b561594ff49": {
+-        "compensate": 1.035,
+-        "mdx_dim_f_set": 3072,
+-        "mdx_dim_t_set": 8,
+-        "mdx_n_fft_scale_set": 7680,
+-        "primary_stem": "Instrumental"
+-    },
+-    "b06327a00d5e5fbc7d96e1781bbdb596": {
+-        "compensate": 1.035,
+-        "mdx_dim_f_set": 3072,
+-        "mdx_dim_t_set": 8,
+-        "mdx_n_fft_scale_set": 6144,
+-        "primary_stem": "Instrumental"
+-    },
+-    "94ff780b977d3ca07c7a343dab2e25dd": {
+-        "compensate": 1.039,
+-        "mdx_dim_f_set": 3072,
+-        "mdx_dim_t_set": 8,
+-        "mdx_n_fft_scale_set": 6144,
+-        "primary_stem": "Instrumental"
+-    },
+-    "73492b58195c3b52d34590d5474452f6": {
+-        "compensate": 1.043,
+-        "mdx_dim_f_set": 3072,
+-        "mdx_dim_t_set": 8,
+-        "mdx_n_fft_scale_set": 7680,
+-        "primary_stem": "Vocals"
+-    },
+-    "970b3f9492014d18fefeedfe4773cb42": {
+-        "compensate": 1.009,
+-        "mdx_dim_f_set": 3072,
+-        "mdx_dim_t_set": 8,
+-        "mdx_n_fft_scale_set": 7680,
+-        "primary_stem": "Vocals"
+-    },
+-    "1d64a6d2c30f709b8c9b4ce1366d96ee": {
+-        "compensate": 1.065,
+-        "mdx_dim_f_set": 2048,
+-        "mdx_dim_t_set": 8,
+-        "mdx_n_fft_scale_set": 5120,
+-        "primary_stem": "Instrumental",
+-        "is_karaoke": true
+-    },
+-    "203f2a3955221b64df85a41af87cf8f0": {
+-        "compensate": 1.035,
+-        "mdx_dim_f_set": 3072,
+-        "mdx_dim_t_set": 8,
+-        "mdx_n_fft_scale_set": 6144,
+-        "primary_stem": "Instrumental"
+-    },
+-    "291c2049608edb52648b96e27eb80e95": {
+-        "compensate": 1.035,
+-        "mdx_dim_f_set": 3072,
+-        "mdx_dim_t_set": 8,
+-        "mdx_n_fft_scale_set": 6144,
+-        "primary_stem": "Instrumental"
+-    },
+-    "ead8d05dab12ec571d67549b3aab03fc": {
+-        "compensate": 1.035,
+-        "mdx_dim_f_set": 3072,
+-        "mdx_dim_t_set": 8,
+-        "mdx_n_fft_scale_set": 6144,
+-        "primary_stem": "Instrumental"
+-    },
+-    "cc63408db3d80b4d85b0287d1d7c9632": {
+-        "compensate": 1.033,
+-        "mdx_dim_f_set": 3072,
+-        "mdx_dim_t_set": 8,
+-        "mdx_n_fft_scale_set": 6144,
+-        "primary_stem": "Instrumental"
+-    },
+-    "cd5b2989ad863f116c855db1dfe24e39": {
+-        "compensate": 1.035,
+-        "mdx_dim_f_set": 3072,
+-        "mdx_dim_t_set": 9,
+-        "mdx_n_fft_scale_set": 6144,
+-        "primary_stem": "Reverb"
+-    },
+-    "55657dd70583b0fedfba5f67df11d711": {
+-        "compensate": 1.022,
+-        "mdx_dim_f_set": 3072,
+-        "mdx_dim_t_set": 8,
+-        "mdx_n_fft_scale_set": 6144,
+-        "primary_stem": "Instrumental"
+-    },
+-    "b6bccda408a436db8500083ef3491e8b": {
+-        "compensate": 1.02,
+-        "mdx_dim_f_set": 3072,
+-        "mdx_dim_t_set": 8,
+-        "mdx_n_fft_scale_set": 7680,
+-        "primary_stem": "Instrumental"
+-    },
+-    "8a88db95c7fb5dbe6a095ff2ffb428b1": {
+-        "compensate": 1.026,
+-        "mdx_dim_f_set": 2048,
+-        "mdx_dim_t_set": 8,
+-        "mdx_n_fft_scale_set": 5120,
+-        "primary_stem": "Instrumental"
+-    },
+-    "b78da4afc6512f98e4756f5977f5c6b9": {
+-        "compensate": 1.021,
+-        "mdx_dim_f_set": 3072,
+-        "mdx_dim_t_set": 8,
+-        "mdx_n_fft_scale_set": 7680,
+-        "primary_stem": "Instrumental"
+-    },
+-    "77d07b2667ddf05b9e3175941b4454a0": {
+-        "compensate": 1.021,
+-        "mdx_dim_f_set": 3072,
+-        "mdx_dim_t_set": 8,
+-        "mdx_n_fft_scale_set": 7680,
+-        "primary_stem": "Vocals"
+-    },
+-    "2154254ee89b2945b97a7efed6e88820": {
+-        "config_yaml": "model_2_stem_061321.yaml"
+-    },
+-    "063aadd735d58150722926dcbf5852a9": {
+-        "config_yaml": "model_2_stem_061321.yaml"
+-    },
+-    "c09f714d978b41d718facfe3427e6001": {
+-        "config_yaml": "model_2_stem_061321.yaml"
+-    },
+-    "fe96801369f6a148df2720f5ced88c19": {
+-        "config_yaml": "model3.yaml"
+-    },
+-    "02e8b226f85fb566e5db894b9931c640": {
+-        "config_yaml": "model2.yaml"
+-    },
+-    "e3de6d861635ab9c1d766149edd680d6": {
+-        "config_yaml": "model1.yaml"
+-    },
+-    "3f2936c554ab73ce2e396d54636bd373": {
+-        "config_yaml": "modelB.yaml"
+-    },
+-    "890d0f6f82d7574bca741a9e8bcb8168": {
+-        "config_yaml": "modelB.yaml"
+-    },
+-    "63a3cb8c37c474681049be4ad1ba8815": {
+-        "config_yaml": "modelB.yaml"
+-    },
+-    "a7fc5d719743c7fd6b61bd2b4d48b9f0": {
+-        "config_yaml": "modelA.yaml"
+-    },
+-    "3567f3dee6e77bf366fcb1c7b8bc3745": {
+-        "config_yaml": "modelA.yaml"
+-    },
+-    "a28f4d717bd0d34cd2ff7a3b0a3d065e": {
+-        "config_yaml": "modelA.yaml"
+-    },
+-    "c9971a18da20911822593dc81caa8be9": {
+-        "config_yaml": "sndfx.yaml"
+-    },
+-    "57d94d5ed705460d21c75a5ac829a605": {
+-        "config_yaml": "sndfx.yaml"
+-    },
+-    "e7a25f8764f25a52c1b96c4946e66ba2": {
+-        "config_yaml": "sndfx.yaml"
+-    },
+-    "104081d24e37217086ce5fde09147ee1": {
+-        "config_yaml": "model_2_stem_061321.yaml"
+-    },
+-    "1e6165b601539f38d0a9330f3facffeb": {
+-        "config_yaml": "model_2_stem_061321.yaml"
+-    },
+-    "fe0108464ce0d8271be5ab810891bd7c": {
+-        "config_yaml": "model_2_stem_full_band.yaml"
+-    },
+-    "e9b82ec90ee56c507a3a982f1555714c": {
+-        "config_yaml": "model_2_stem_full_band_2.yaml"
+-    },
+-    "99b6ceaae542265a3b6d657bf9fde79f": {
+-        "config_yaml": "model_2_stem_full_band_8k.yaml"
+-    }
++{
++    "0ddfc0eb5792638ad5dc27850236c246": {
++        "compensate": 1.035,
++        "mdx_dim_f_set": 2048,
++        "mdx_dim_t_set": 8,
++        "mdx_n_fft_scale_set": 6144,
++        "primary_stem": "Vocals"
++    },
++    "26d308f91f3423a67dc69a6d12a8793d": {
++        "compensate": 1.035,
++        "mdx_dim_f_set": 2048,
++        "mdx_dim_t_set": 9,
++        "mdx_n_fft_scale_set": 8192,
++        "primary_stem": "Other"
++    },
++    "2cdd429caac38f0194b133884160f2c6": {
++        "compensate": 1.045,
++        "mdx_dim_f_set": 3072,
++        "mdx_dim_t_set": 8,
++        "mdx_n_fft_scale_set": 7680,
++        "primary_stem": "Instrumental"
++    },
++    "2f5501189a2f6db6349916fabe8c90de": {
++        "compensate": 1.035,
++        "mdx_dim_f_set": 2048,
++        "mdx_dim_t_set": 8,
++        "mdx_n_fft_scale_set": 6144,
++        "primary_stem": "Vocals",
++        "is_karaoke": true
++    },
++    "398580b6d5d973af3120df54cee6759d": {
++        "compensate": 1.75,
++        "mdx_dim_f_set": 3072,
++        "mdx_dim_t_set": 8,
++        "mdx_n_fft_scale_set": 7680,
++        "primary_stem": "Vocals"
++    },
++    "488b3e6f8bd3717d9d7c428476be2d75": {
++        "compensate": 1.035,
++        "mdx_dim_f_set": 3072,
++        "mdx_dim_t_set": 8,
++        "mdx_n_fft_scale_set": 7680,
++        "primary_stem": "Instrumental"
++    },
++    "4910e7827f335048bdac11fa967772f9": {
++        "compensate": 1.035,
++        "mdx_dim_f_set": 2048,
++        "mdx_dim_t_set": 7,
++        "mdx_n_fft_scale_set": 4096,
++        "primary_stem": "Drums"
++    },
++    "53c4baf4d12c3e6c3831bb8f5b532b93": {
++        "compensate": 1.043,
++        "mdx_dim_f_set": 3072,
++        "mdx_dim_t_set": 8,
++        "mdx_n_fft_scale_set": 7680,
++        "primary_stem": "Vocals"
++    },
++    "5d343409ef0df48c7d78cce9f0106781": {
++        "compensate": 1.075,
++        "mdx_dim_f_set": 3072,
++        "mdx_dim_t_set": 8,
++        "mdx_n_fft_scale_set": 7680,
++        "primary_stem": "Vocals"
++    },
++    "5f6483271e1efb9bfb59e4a3e6d4d098": {
++        "compensate": 1.035,
++        "mdx_dim_f_set": 2048,
++        "mdx_dim_t_set": 9,
++        "mdx_n_fft_scale_set": 6144,
++        "primary_stem": "Vocals"
++    },
++    "65ab5919372a128e4167f5e01a8fda85": {
++        "compensate": 1.035,
++        "mdx_dim_f_set": 2048,
++        "mdx_dim_t_set": 8,
++        "mdx_n_fft_scale_set": 8192,
++        "primary_stem": "Other"
++    },
++    "6703e39f36f18aa7855ee1047765621d": {
++        "compensate": 1.035,
++        "mdx_dim_f_set": 2048,
++        "mdx_dim_t_set": 9,
++        "mdx_n_fft_scale_set": 16384,
++        "primary_stem": "Bass"
++    },
++    "6b31de20e84392859a3d09d43f089515": {
++        "compensate": 1.035,
++        "mdx_dim_f_set": 2048,
++        "mdx_dim_t_set": 8,
++        "mdx_n_fft_scale_set": 6144,
++        "primary_stem": "Vocals"
++    },
++    "867595e9de46f6ab699008295df62798": {
++        "compensate": 1.03,
++        "mdx_dim_f_set": 3072,
++        "mdx_dim_t_set": 8,
++        "mdx_n_fft_scale_set": 7680,
++        "primary_stem": "Vocals"
++    },
++    "a3cd63058945e777505c01d2507daf37": {
++        "compensate": 1.03,
++        "mdx_dim_f_set": 2048,
++        "mdx_dim_t_set": 8,
++        "mdx_n_fft_scale_set": 6144,
++        "primary_stem": "Vocals"
++    },
++    "b33d9b3950b6cbf5fe90a32608924700": {
++        "compensate": 1.03,
++        "mdx_dim_f_set": 3072,
++        "mdx_dim_t_set": 8,
++        "mdx_n_fft_scale_set": 7680,
++        "primary_stem": "Vocals"
++    },
++    "c3b29bdce8c4fa17ec609e16220330ab": {
++        "compensate": 1.035,
++        "mdx_dim_f_set": 2048,
++        "mdx_dim_t_set": 8,
++        "mdx_n_fft_scale_set": 16384,
++        "primary_stem": "Bass"
++    },
++    "ceed671467c1f64ebdfac8a2490d0d52": {
++        "compensate": 1.035,
++        "mdx_dim_f_set": 3072,
++        "mdx_dim_t_set": 8,
++        "mdx_n_fft_scale_set": 7680,
++        "primary_stem": "Instrumental"
++    },
++    "d2a1376f310e4f7fa37fb9b5774eb701": {
++        "compensate": 1.035,
++        "mdx_dim_f_set": 3072,
++        "mdx_dim_t_set": 8,
++        "mdx_n_fft_scale_set": 7680,
++        "primary_stem": "Instrumental"
++    },
++    "d7bff498db9324db933d913388cba6be": {
++        "compensate": 1.035,
++        "mdx_dim_f_set": 2048,
++        "mdx_dim_t_set": 8,
++        "mdx_n_fft_scale_set": 6144,
++        "primary_stem": "Vocals"
++    },
++    "d94058f8c7f1fae4164868ae8ae66b20": {
++        "compensate": 1.035,
++        "mdx_dim_f_set": 2048,
++        "mdx_dim_t_set": 8,
++        "mdx_n_fft_scale_set": 6144,
++        "primary_stem": "Vocals"
++    },
++    "dc41ede5961d50f277eb846db17f5319": {
++        "compensate": 1.035,
++        "mdx_dim_f_set": 2048,
++        "mdx_dim_t_set": 9,
++        "mdx_n_fft_scale_set": 4096,
++        "primary_stem": "Drums"
++    },
++    "e5572e58abf111f80d8241d2e44e7fa4": {
++        "compensate": 1.028,
++        "mdx_dim_f_set": 3072,
++        "mdx_dim_t_set": 8,
++        "mdx_n_fft_scale_set": 7680,
++        "primary_stem": "Instrumental"
++    },
++    "e7324c873b1f615c35c1967f912db92a": {
++        "compensate": 1.03,
++        "mdx_dim_f_set": 3072,
++        "mdx_dim_t_set": 8,
++        "mdx_n_fft_scale_set": 7680,
++        "primary_stem": "Vocals"
++    },
++    "1c56ec0224f1d559c42fd6fd2a67b154": {
++        "compensate": 1.025,
++        "mdx_dim_f_set": 2048,
++        "mdx_dim_t_set": 8,
++        "mdx_n_fft_scale_set": 5120,
++        "primary_stem": "Instrumental"
++    },
++    "f2df6d6863d8f435436d8b561594ff49": {
++        "compensate": 1.035,
++        "mdx_dim_f_set": 3072,
++        "mdx_dim_t_set": 8,
++        "mdx_n_fft_scale_set": 7680,
++        "primary_stem": "Instrumental"
++    },
++    "b06327a00d5e5fbc7d96e1781bbdb596": {
++        "compensate": 1.035,
++        "mdx_dim_f_set": 3072,
++        "mdx_dim_t_set": 8,
++        "mdx_n_fft_scale_set": 6144,
++        "primary_stem": "Instrumental"
++    },
++    "94ff780b977d3ca07c7a343dab2e25dd": {
++        "compensate": 1.039,
++        "mdx_dim_f_set": 3072,
++        "mdx_dim_t_set": 8,
++        "mdx_n_fft_scale_set": 6144,
++        "primary_stem": "Instrumental"
++    },
++    "73492b58195c3b52d34590d5474452f6": {
++        "compensate": 1.043,
++        "mdx_dim_f_set": 3072,
++        "mdx_dim_t_set": 8,
++        "mdx_n_fft_scale_set": 7680,
++        "primary_stem": "Vocals"
++    },
++    "970b3f9492014d18fefeedfe4773cb42": {
++        "compensate": 1.009,
++        "mdx_dim_f_set": 3072,
++        "mdx_dim_t_set": 8,
++        "mdx_n_fft_scale_set": 7680,
++        "primary_stem": "Vocals"
++    },
++    "1d64a6d2c30f709b8c9b4ce1366d96ee": {
++        "compensate": 1.065,
++        "mdx_dim_f_set": 2048,
++        "mdx_dim_t_set": 8,
++        "mdx_n_fft_scale_set": 5120,
++        "primary_stem": "Instrumental",
++        "is_karaoke": true
++    },
++    "203f2a3955221b64df85a41af87cf8f0": {
++        "compensate": 1.035,
++        "mdx_dim_f_set": 3072,
++        "mdx_dim_t_set": 8,
++        "mdx_n_fft_scale_set": 6144,
++        "primary_stem": "Instrumental"
++    },
++    "291c2049608edb52648b96e27eb80e95": {
++        "compensate": 1.035,
++        "mdx_dim_f_set": 3072,
++        "mdx_dim_t_set": 8,
++        "mdx_n_fft_scale_set": 6144,
++        "primary_stem": "Instrumental"
++    },
++    "ead8d05dab12ec571d67549b3aab03fc": {
++        "compensate": 1.035,
++        "mdx_dim_f_set": 3072,
++        "mdx_dim_t_set": 8,
++        "mdx_n_fft_scale_set": 6144,
++        "primary_stem": "Instrumental"
++    },
++    "cc63408db3d80b4d85b0287d1d7c9632": {
++        "compensate": 1.033,
++        "mdx_dim_f_set": 3072,
++        "mdx_dim_t_set": 8,
++        "mdx_n_fft_scale_set": 6144,
++        "primary_stem": "Instrumental"
++    },
++    "cd5b2989ad863f116c855db1dfe24e39": {
++        "compensate": 1.035,
++        "mdx_dim_f_set": 3072,
++        "mdx_dim_t_set": 9,
++        "mdx_n_fft_scale_set": 6144,
++        "primary_stem": "Reverb"
++    },
++    "55657dd70583b0fedfba5f67df11d711": {
++        "compensate": 1.022,
++        "mdx_dim_f_set": 3072,
++        "mdx_dim_t_set": 8,
++        "mdx_n_fft_scale_set": 6144,
++        "primary_stem": "Instrumental"
++    },
++    "b6bccda408a436db8500083ef3491e8b": {
++        "compensate": 1.02,
++        "mdx_dim_f_set": 3072,
++        "mdx_dim_t_set": 8,
++        "mdx_n_fft_scale_set": 7680,
++        "primary_stem": "Instrumental"
++    },
++    "8a88db95c7fb5dbe6a095ff2ffb428b1": {
++        "compensate": 1.026,
++        "mdx_dim_f_set": 2048,
++        "mdx_dim_t_set": 8,
++        "mdx_n_fft_scale_set": 5120,
++        "primary_stem": "Instrumental"
++    },
++    "b78da4afc6512f98e4756f5977f5c6b9": {
++        "compensate": 1.021,
++        "mdx_dim_f_set": 3072,
++        "mdx_dim_t_set": 8,
++        "mdx_n_fft_scale_set": 7680,
++        "primary_stem": "Instrumental"
++    },
++    "77d07b2667ddf05b9e3175941b4454a0": {
++        "compensate": 1.021,
++        "mdx_dim_f_set": 3072,
++        "mdx_dim_t_set": 8,
++        "mdx_n_fft_scale_set": 7680,
++        "primary_stem": "Vocals"
++    },
++    "0f2a6bc5b49d87d64728ee40e23bceb1": {
++        "compensate": 1.019,
++        "mdx_dim_f_set": 2560,
++        "mdx_dim_t_set": 8,
++        "mdx_n_fft_scale_set": 5120,
++        "primary_stem": "Instrumental"
++    },
++    "cb790d0c913647ced70fc6b38f5bea1a": {
++        "compensate": 1.01,
++        "mdx_dim_f_set": 2560,
++        "mdx_dim_t_set": 8,
++        "mdx_n_fft_scale_set": 5120,
++        "primary_stem": "Instrumental"
++    },
++    "b02be2d198d4968a121030cf8950b492": {
++        "compensate": 1.02,
++        "mdx_dim_f_set": 2560,
++        "mdx_dim_t_set": 8,
++        "mdx_n_fft_scale_set": 5120,
++        "primary_stem": "No Crowd"
++    },
++    "2154254ee89b2945b97a7efed6e88820": {
++        "config_yaml": "model_2_stem_061321.yaml"
++    },
++    "063aadd735d58150722926dcbf5852a9": {
++        "config_yaml": "model_2_stem_061321.yaml"
++    },
++    "c09f714d978b41d718facfe3427e6001": {
++        "config_yaml": "model_2_stem_061321.yaml"
++    },
++    "fe96801369f6a148df2720f5ced88c19": {
++        "config_yaml": "model3.yaml"
++    },
++    "02e8b226f85fb566e5db894b9931c640": {
++        "config_yaml": "model2.yaml"
++    },
++    "e3de6d861635ab9c1d766149edd680d6": {
++        "config_yaml": "model1.yaml"
++    },
++    "3f2936c554ab73ce2e396d54636bd373": {
++        "config_yaml": "modelB.yaml"
++    },
++    "890d0f6f82d7574bca741a9e8bcb8168": {
++        "config_yaml": "modelB.yaml"
++    },
++    "63a3cb8c37c474681049be4ad1ba8815": {
++        "config_yaml": "modelB.yaml"
++    },
++    "a7fc5d719743c7fd6b61bd2b4d48b9f0": {
++        "config_yaml": "modelA.yaml"
++    },
++    "3567f3dee6e77bf366fcb1c7b8bc3745": {
++        "config_yaml": "modelA.yaml"
++    },
++    "a28f4d717bd0d34cd2ff7a3b0a3d065e": {
++        "config_yaml": "modelA.yaml"
++    },
++    "c9971a18da20911822593dc81caa8be9": {
++        "config_yaml": "sndfx.yaml"
++    },
++    "57d94d5ed705460d21c75a5ac829a605": {
++        "config_yaml": "sndfx.yaml"
++    },
++    "e7a25f8764f25a52c1b96c4946e66ba2": {
++        "config_yaml": "sndfx.yaml"
++    },
++    "104081d24e37217086ce5fde09147ee1": {
++        "config_yaml": "model_2_stem_061321.yaml"
++    },
++    "1e6165b601539f38d0a9330f3facffeb": {
++        "config_yaml": "model_2_stem_061321.yaml"
++    },
++    "fe0108464ce0d8271be5ab810891bd7c": {
++        "config_yaml": "model_2_stem_full_band.yaml"
++    },
++    "e9b82ec90ee56c507a3a982f1555714c": {
++        "config_yaml": "model_2_stem_full_band_2.yaml"
++    },
++    "99b6ceaae542265a3b6d657bf9fde79f": {
++        "config_yaml": "model_2_stem_full_band_8k.yaml"
++    },
++    "116f6f9dabb907b53d847ed9f7a9475f": {
++        "config_yaml": "model_2_stem_full_band_8k.yaml"
++    },
++    "53f707017bfcbb56f5e1bfac420d6732": {
++        "config_yaml": "model_bs_roformer_ep_317_sdr_12.9755.yaml",
++        "is_roformer": true
++    },
++    "63e41acc264bf681a73aa9f7e5f606cc": {
++        "config_yaml": "model_mel_band_roformer_ep_3005_sdr_11.4360.yaml",
++        "is_roformer": true
++    },
++    "e733736763234047587931fc35322fd9": {
++        "config_yaml": "model_bs_roformer_ep_937_sdr_10.5309.yaml",
++        "is_roformer": true
++    },
++    "d7a256bee3e7c620f554bceaab2f68f6": {
++        "config_yaml": "config_melbandroformer_inst.yaml",
++        "is_roformer": true
++    },
++    "365ccfa0e04b31ac2e24bbb935142a81": {
++        "config_yaml": "config_melbandroformer_inst.yaml",
++        "is_roformer": true
++    },
++    "3c15abf122d8eccc4a0eb97bf84a3e58": {
++        "config_yaml": "config_melbandroformer_instvoc_duality.yaml",
++        "is_roformer": true
++    },
++    "9fb197af219c5172ea38703a33aceb79": {
++        "config_yaml": "config_melbandroformer_instvoc_duality.yaml",
++        "is_roformer": true
++    },
++    "d789065adfd747d6f585b27b495bcdae": {
++        "config_yaml": "model_bs_roformer_ep_368_sdr_12.9628.yaml",
++        "is_roformer": true
++    },
++    "e4ca75912fcff3224a19058e55facfbf": {
++        "config_yaml": "config_vocals_mel_band_roformer_kim.yaml",
++        "is_roformer": true
++    },
++    "951f8ef420a941a395a9919f5d55cce9": {
++        "config_yaml": "config_melbandroformer_inst_v2.yaml",
++        "is_roformer": true
++    },
++    "8d306349be961bd1de6b02ee598920b3": {
++        "config_yaml": "config_mel_band_roformer_karaoke.yaml",
++        "is_roformer": true,
++        "model_type": "MelBand-Roformer",
++        "is_karaoke": true
++    },
++    "b1e6014529f71b38dae30aec978c8eb4": {
++        "config_yaml": "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml",
++        "is_roformer": false,
++        "model_type": "MDX23C",
++        "is_karaoke": false
++    },
++    "490993ba65cd8b61a97a7c61650ddb7d": {
++        "config_yaml": "BS_Inst_EXP_VRL.yaml",
++        "is_roformer": true,
++        "model_type": "BS-Roformer v2",
++        "is_karaoke": false
++    },
++    "cfa9cee352938476c31e92656f1b9074": {
++        "config_yaml": "config_dnr_bandit_v2_mus64.yaml",
++        "is_roformer": true,
++        "model_type": "Bandit v2",
++        "is_karaoke": false
++    },
++    "8318a54fe1278ddcf78aad32145c0a6f": {
++        "config_yaml": "deverb_bs_roformer_8_256dim_8depth.yaml",
++        "is_roformer": true,
++        "model_type": "BS-Roformer",
++        "is_karaoke": false
++    },
++    "3bff56e6709357854e71cb2e7802733a": {
++        "config_yaml": "config_dnr_bandit_bsrnn_multi_mus64.yaml",
++        "is_roformer": true,
++        "model_type": "Bandit",
++        "is_karaoke": false
++    },
++    "c7500d7fdb1c0fc24b14b698515462d2": {
++        "config_yaml": "config_mdx23c_similarity.yaml",
++        "is_roformer": false,
++        "model_type": "MDX23C",
++        "is_karaoke": false
++    },
++    "77dd1942c0feb5c04ad0b4effa34fbc6": {
++        "config_yaml": "config_musdb18_scnet_large.yaml",
++        "is_roformer": true,
++        "model_type": "SCNet",
++        "is_karaoke": false
++    },
++    "6e749f5803b8baa7988a10393bb96df1": {
++        "config_yaml": "config_musdb18_scnet.yaml",
++        "is_roformer": true,
++        "model_type": "SCNet",
++        "is_karaoke": false
++    },
++    "bb845b04a3cb0d7a32cdb1f2ce1e007c": {
++        "config_yaml": "config_musdb18_scnet_large_starrytong.yaml",
++        "is_roformer": true,
++        "model_type": "SCNet",
++        "is_karaoke": false
++    },
++    "85b1955d57c0719e94e832eaaeceb0a8": {
++        "config_yaml": "config_musdb18_scnet_xl.yaml",
++        "is_roformer": true,
++        "model_type": "SCNet",
++        "is_karaoke": false
++    }
+ }
+\ No newline at end of file
+diff --git i/models/MDX_Net_Models/model_data/model_name_mapper.json w/models/MDX_Net_Models/model_data/model_name_mapper.json
+index 1476ad0..bf98876 100644
+--- i/models/MDX_Net_Models/model_data/model_name_mapper.json
++++ w/models/MDX_Net_Models/model_data/model_name_mapper.json
+@@ -1,22 +1,48 @@
+-{
+-    "UVR_MDXNET_1_9703": "UVR-MDX-NET 1",
+-    "UVR_MDXNET_2_9682": "UVR-MDX-NET 2",
+-    "UVR_MDXNET_3_9662": "UVR-MDX-NET 3",
+-    "UVR_MDXNET_KARA": "UVR-MDX-NET Karaoke",
+-    "UVR_MDXNET_Main": "UVR-MDX-NET Main",
+-    "UVR-MDX-NET-Inst_1": "UVR-MDX-NET Inst 1",
+-    "UVR-MDX-NET-Inst_2": "UVR-MDX-NET Inst 2",
+-    "UVR-MDX-NET-Inst_3": "UVR-MDX-NET Inst 3",
+-    "UVR-MDX-NET-Inst_4": "UVR-MDX-NET Inst 4",
+-    "UVR-MDX-NET-Inst_Main": "UVR-MDX-NET Inst Main",
+-    "UVR-MDX-NET-Inst_Main_2": "UVR-MDX-NET Inst Main 2",
+-    "UVR-MDX-NET-Inst_HQ_1": "UVR-MDX-NET Inst HQ 1",
+-    "UVR-MDX-NET-Inst_HQ_2": "UVR-MDX-NET Inst HQ 2",
+-    "UVR-MDX-NET-Inst_HQ_3": "UVR-MDX-NET Inst HQ 3",
+-    "UVR_MDXNET_KARA_2": "UVR-MDX-NET Karaoke 2",
+-    "Kim_Vocal_1": "Kim Vocal 1",
+-    "Kim_Vocal_2": "Kim Vocal 2",
+-    "Kim_Inst": "Kim Inst",
+-    "MDX23C-8KFFT-InstVoc_HQ.ckpt": "MDX23C-InstVoc HQ",
+-    "Reverb_HQ_By_FoxJoy": "Reverb HQ"
++{
++    "UVR_MDXNET_1_9703": "UVR-MDX-NET 1",
++    "UVR_MDXNET_2_9682": "UVR-MDX-NET 2",
++    "UVR_MDXNET_3_9662": "UVR-MDX-NET 3",
++    "UVR_MDXNET_KARA": "UVR-MDX-NET Karaoke",
++    "UVR_MDXNET_Main": "UVR-MDX-NET Main",
++    "UVR-MDX-NET-Inst_1": "UVR-MDX-NET Inst 1",
++    "UVR-MDX-NET-Inst_2": "UVR-MDX-NET Inst 2",
++    "UVR-MDX-NET-Inst_3": "UVR-MDX-NET Inst 3",
++    "UVR-MDX-NET-Inst_4": "UVR-MDX-NET Inst 4",
++    "UVR-MDX-NET-Inst_Main": "UVR-MDX-NET Inst Main",
++    "UVR-MDX-NET-Inst_Main_2": "UVR-MDX-NET Inst Main 2",
++    "UVR-MDX-NET-Inst_HQ_1": "UVR-MDX-NET Inst HQ 1",
++    "UVR-MDX-NET-Inst_HQ_2": "UVR-MDX-NET Inst HQ 2",
++    "UVR-MDX-NET-Inst_HQ_3": "UVR-MDX-NET Inst HQ 3",
++    "UVR-MDX-NET-Inst_HQ_4": "UVR-MDX-NET Inst HQ 4",
++    "UVR-MDX-NET-Inst_HQ_5": "UVR-MDX-NET Inst HQ 5",
++    "UVR-MDX-NET_Crowd_HQ_1": "UVR-MDX-NET Crowd HQ 1",
++    "UVR_MDXNET_KARA_2": "UVR-MDX-NET Karaoke 2",
++    "Kim_Vocal_1": "Kim Vocal 1",
++    "Kim_Vocal_2": "Kim Vocal 2",
++    "Kim_Inst": "Kim Inst",
++    "MDX23C-8KFFT-InstVoc_HQ.ckpt": "MDX23C-InstVoc HQ",
++    "MDX23C-8KFFT-InstVoc_HQ_2.ckpt": "MDX23C-InstVoc HQ 2",
++    "MDX23C_D1581.ckpt": "MDX23C-InstVoc D1581",
++    "Reverb_HQ_By_FoxJoy": "Reverb HQ",
++    "model_bs_roformer_ep_317_sdr_12.9755.ckpt": "BS-Roformer-Viperx-1297",
++    "model_bs_roformer_ep_368_sdr_12.9628.ckpt": "BS-Roformer-Viperx-1296",
++    "model_bs_roformer_ep_937_sdr_10.5309.ckpt": "BS-Roformer-Viperx-1053",
++    "model_mel_band_roformer_ep_3005_sdr_11.4360.ckpt": "Mel-Roformer-Viperx-1143",
++    "melband_roformer_inst_v1.ckpt": "MB-Roformer-Inst-v1",
++    "melband_roformer_inst_v2.ckpt": "MB-Roformer-Inst-v2",
++    "inst_v1e.ckpt": "MB-Roformer-Inst-v1-E",
++    "melband_roformer_instvoc_duality_v1.ckpt": "MB-Roformer-InstVoc-Duality-v1",
++    "melband_roformer_instvox_duality_v2.ckpt": "MB-Roformer-InstVoc-Duality-v2",
++    "MelBandRoformer.ckpt": "MB-Roformer-Kim",
++    "BS_Inst_EXP_VRL.ckpt": "BS-Ro-Inst-EXP-Unwa",
++    "mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956.ckpt": "MB-Ro-Kara-Aufr33-Viperx",
++    "deverb_bs_roformer_8_256dim_8depth.ckpt": "BS-Ro-Dereverb-Anvuew",
++    "model_bandit_plus_dnr_sdr_11.47.ckpt": "Cinematic-Bandit-Plus",
++    "checkpoint-multi_fixed.ckpt": "Cinematic-Bandit-Multi",
++    "scnet_checkpoint_musdb18.ckpt": "4S-SCNet-Starrytong",
++    "SCNet-large_starrytong_fixed.ckpt": "4S-SCNet-Large-Starrytong",
++    "model_scnet_sdr_9.3244.ckpt": "4S-SCNet-Large",
++    "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt": "DrumSep-Aufr33-Jarredou",
++    "model_mdx23c_ep_271_l1_freq_72.2383.ckpt": "Phantom-Mid-Wesleyr36",
++    "model_scnet_ep_54_sdr_9.8051.ckpt": "4S-SCNet-XL-ZFTurbo"
+ }
+\ No newline at end of file
+diff --git i/models/VR_Models/model_data/model_data.json w/models/VR_Models/model_data/model_data.json
+index 2ff77d0..827e7e5 100644
+--- i/models/VR_Models/model_data/model_data.json
++++ w/models/VR_Models/model_data/model_data.json
+@@ -1,137 +1,137 @@
+-{
+-    "0d0e6d143046b0eecc41a22e60224582": {
+-        "vr_model_param": "3band_44100_mid",
+-        "primary_stem": "Instrumental"
+-    },
+-    "18b52f873021a0af556fb4ecd552bb8e": {
+-        "vr_model_param": "2band_32000",
+-        "primary_stem": "Instrumental"
+-    },
+-    "1fc66027c82b499c7d8f55f79e64cadc": {
+-        "vr_model_param": "2band_32000",
+-        "primary_stem": "Instrumental"
+-    },
+-    "2aa34fbc01f8e6d2bf509726481e7142": {
+-        "vr_model_param": "4band_44100",
+-        "primary_stem": "No Piano"
+-    },
+-    "3e18f639b11abea7361db1a4a91c2559": {
+-        "vr_model_param": "4band_44100",
+-        "primary_stem": "Instrumental"
+-    },
+-    "570b5f50054609a17741369a35007ddd": {
+-        "vr_model_param": "4band_v3",
+-        "primary_stem": "Instrumental"
+-    },
+-    "5a6e24c1b530f2dab045a522ef89b751": {
+-        "vr_model_param": "1band_sr44100_hl512",
+-        "primary_stem": "Instrumental"
+-    },
+-    "6b5916069a49be3fe29d4397ecfd73fa": {
+-        "vr_model_param": "3band_44100_msb2",
+-        "primary_stem": "Instrumental",
+-        "is_karaoke": true
+-    },
+-    "74b3bc5fa2b69f29baf7839b858bc679": {
+-        "vr_model_param": "4band_44100",
+-        "primary_stem": "Instrumental"
+-    },
+-    "827213b316df36b52a1f3d04fec89369": {
+-        "vr_model_param": "4band_44100",
+-        "primary_stem": "Instrumental"
+-    },
+-    "911d4048eee7223eca4ee0efb7d29256": {
+-        "vr_model_param": "4band_44100",
+-        "primary_stem": "Vocals"
+-    },
+-    "941f3f7f0b0341f12087aacdfef644b1": {
+-        "vr_model_param": "4band_v2",
+-        "primary_stem": "Instrumental"
+-    },
+-    "a02827cf69d75781a35c0e8a327f3195": {
+-        "vr_model_param": "1band_sr33075_hl384",
+-        "primary_stem": "Instrumental"
+-    },
+-    "b165fbff113c959dba5303b74c6484bc": {
+-        "vr_model_param": "3band_44100",
+-        "primary_stem": "Instrumental"
+-    },
+-    "b5f988cd3e891dca7253bf5f0f3427c7": {
+-        "vr_model_param": "4band_44100",
+-        "primary_stem": "Instrumental"
+-    },
+-    "b99c35723bc35cb11ed14a4780006a80": {
+-        "vr_model_param": "1band_sr44100_hl1024",
+-        "primary_stem": "Instrumental"
+-    },
+-    "ba02fd25b71d620eebbdb49e18e4c336": {
+-        "vr_model_param": "3band_44100_mid",
+-        "primary_stem": "Instrumental"
+-    },
+-    "c4476ef424d8cba65f38d8d04e8514e2": {
+-        "vr_model_param": "3band_44100_msb2",
+-        "primary_stem": "Instrumental"
+-    },
+-    "da2d37b8be2972e550a409bae08335aa": {
+-        "vr_model_param": "4band_44100",
+-        "primary_stem": "Vocals"
+-    },
+-    "db57205d3133e39df8e050b435a78c80": {
+-        "vr_model_param": "4band_44100",
+-        "primary_stem": "Instrumental"
+-    },
+-    "ea83b08e32ec2303456fe50659035f69": {
+-        "vr_model_param": "4band_v3",
+-        "primary_stem": "Instrumental"
+-    },
+-    "f6ea8473ff86017b5ebd586ccacf156b": {
+-        "vr_model_param": "4band_v2_sn",
+-        "primary_stem": "Instrumental",
+-        "is_karaoke": true
+-    },
+-    "fd297a61eafc9d829033f8b987c39a3d": {
+-        "vr_model_param": "1band_sr32000_hl512",
+-        "primary_stem": "Instrumental"
+-    },
+-    "0ec76fd9e65f81d8b4fbd13af4826ed8": {
+-        "vr_model_param": "4band_v3",
+-        "primary_stem": "No Woodwinds"
+-    },
+-    "0fb9249ffe4ffc38d7b16243f394c0ff": {
+-        "vr_model_param": "4band_v3",
+-        "primary_stem": "No Reverb"
+-    },
+-    "6857b2972e1754913aad0c9a1678c753": {
+-        "vr_model_param": "4band_v3",
+-        "primary_stem": "Echo",
+-        "nout": 48,
+-        "nout_lstm": 128
+-    },
+-    "f200a145434efc7dcf0cd093f517ed52": {
+-        "vr_model_param": "4band_v3",
+-        "primary_stem": "No Echo",
+-        "nout": 48,
+-        "nout_lstm": 128
+-    },
+-    "44c55d8b5d2e3edea98c2b2bf93071c7": {
+-        "vr_model_param": "4band_v3",
+-        "primary_stem": "Noise",
+-        "nout": 48,
+-        "nout_lstm": 128
+-    },
+-    "51ea8c43a6928ed3c10ef5cb2707d57b": {
+-        "vr_model_param": "1band_sr44100_hl1024",
+-        "primary_stem": "Noise",
+-        "nout": 16,
+-        "nout_lstm": 128
+-    },
+-    "944950a9c5963a5eb70b445d67b7068a": {
+-        "vr_model_param": "4band_v3_sn",
+-        "primary_stem": "Vocals",
+-        "nout": 64,
+-        "nout_lstm": 128,
+-        "is_karaoke": false,
+-        "is_bv_model": true,
+-        "is_bv_model_rebalanced": 0.9
+-    }
++{
++    "0d0e6d143046b0eecc41a22e60224582": {
++        "vr_model_param": "3band_44100_mid",
++        "primary_stem": "Instrumental"
++    },
++    "18b52f873021a0af556fb4ecd552bb8e": {
++        "vr_model_param": "2band_32000",
++        "primary_stem": "Instrumental"
++    },
++    "1fc66027c82b499c7d8f55f79e64cadc": {
++        "vr_model_param": "2band_32000",
++        "primary_stem": "Instrumental"
++    },
++    "2aa34fbc01f8e6d2bf509726481e7142": {
++        "vr_model_param": "4band_44100",
++        "primary_stem": "No Piano"
++    },
++    "3e18f639b11abea7361db1a4a91c2559": {
++        "vr_model_param": "4band_44100",
++        "primary_stem": "Instrumental"
++    },
++    "570b5f50054609a17741369a35007ddd": {
++        "vr_model_param": "4band_v3",
++        "primary_stem": "Instrumental"
++    },
++    "5a6e24c1b530f2dab045a522ef89b751": {
++        "vr_model_param": "1band_sr44100_hl512",
++        "primary_stem": "Instrumental"
++    },
++    "6b5916069a49be3fe29d4397ecfd73fa": {
++        "vr_model_param": "3band_44100_msb2",
++        "primary_stem": "Instrumental",
++        "is_karaoke": true
++    },
++    "74b3bc5fa2b69f29baf7839b858bc679": {
++        "vr_model_param": "4band_44100",
++        "primary_stem": "Instrumental"
++    },
++    "827213b316df36b52a1f3d04fec89369": {
++        "vr_model_param": "4band_44100",
++        "primary_stem": "Instrumental"
++    },
++    "911d4048eee7223eca4ee0efb7d29256": {
++        "vr_model_param": "4band_44100",
++        "primary_stem": "Vocals"
++    },
++    "941f3f7f0b0341f12087aacdfef644b1": {
++        "vr_model_param": "4band_v2",
++        "primary_stem": "Instrumental"
++    },
++    "a02827cf69d75781a35c0e8a327f3195": {
++        "vr_model_param": "1band_sr33075_hl384",
++        "primary_stem": "Instrumental"
++    },
++    "b165fbff113c959dba5303b74c6484bc": {
++        "vr_model_param": "3band_44100",
++        "primary_stem": "Instrumental"
++    },
++    "b5f988cd3e891dca7253bf5f0f3427c7": {
++        "vr_model_param": "4band_44100",
++        "primary_stem": "Instrumental"
++    },
++    "b99c35723bc35cb11ed14a4780006a80": {
++        "vr_model_param": "1band_sr44100_hl1024",
++        "primary_stem": "Instrumental"
++    },
++    "ba02fd25b71d620eebbdb49e18e4c336": {
++        "vr_model_param": "3band_44100_mid",
++        "primary_stem": "Instrumental"
++    },
++    "c4476ef424d8cba65f38d8d04e8514e2": {
++        "vr_model_param": "3band_44100_msb2",
++        "primary_stem": "Instrumental"
++    },
++    "da2d37b8be2972e550a409bae08335aa": {
++        "vr_model_param": "4band_44100",
++        "primary_stem": "Vocals"
++    },
++    "db57205d3133e39df8e050b435a78c80": {
++        "vr_model_param": "4band_44100",
++        "primary_stem": "Instrumental"
++    },
++    "ea83b08e32ec2303456fe50659035f69": {
++        "vr_model_param": "4band_v3",
++        "primary_stem": "Instrumental"
++    },
++    "f6ea8473ff86017b5ebd586ccacf156b": {
++        "vr_model_param": "4band_v2_sn",
++        "primary_stem": "Instrumental",
++        "is_karaoke": true
++    },
++    "fd297a61eafc9d829033f8b987c39a3d": {
++        "vr_model_param": "1band_sr32000_hl512",
++        "primary_stem": "Instrumental"
++    },
++    "0ec76fd9e65f81d8b4fbd13af4826ed8": {
++        "vr_model_param": "4band_v3",
++        "primary_stem": "No Woodwinds"
++    },
++    "0fb9249ffe4ffc38d7b16243f394c0ff": {
++        "vr_model_param": "4band_v3",
++        "primary_stem": "No Reverb"
++    },
++    "6857b2972e1754913aad0c9a1678c753": {
++        "vr_model_param": "4band_v3",
++        "primary_stem": "No Echo",
++        "nout": 48,
++        "nout_lstm": 128
++    },
++    "f200a145434efc7dcf0cd093f517ed52": {
++        "vr_model_param": "4band_v3",
++        "primary_stem": "No Echo",
++        "nout": 48,
++        "nout_lstm": 128
++    },
++    "44c55d8b5d2e3edea98c2b2bf93071c7": {
++        "vr_model_param": "4band_v3",
++        "primary_stem": "Noise",
++        "nout": 48,
++        "nout_lstm": 128
++    },
++    "51ea8c43a6928ed3c10ef5cb2707d57b": {
++        "vr_model_param": "1band_sr44100_hl1024",
++        "primary_stem": "Noise",
++        "nout": 16,
++        "nout_lstm": 128
++    },
++    "944950a9c5963a5eb70b445d67b7068a": {
++        "vr_model_param": "4band_v3_sn",
++        "primary_stem": "Vocals",
++        "nout": 64,
++        "nout_lstm": 128,
++        "is_karaoke": false,
++        "is_bv_model": true,
++        "is_bv_model_rebalanced": 0.9
++    }
+ }
+\ No newline at end of file

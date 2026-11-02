@@ -1,0 +1,32 @@
+__pycache__/
+*.bak*
+*.log
+config.json
+.venv/
+
+# never commit models, audio, video or art
+*.pth
+*.index
+*.onnx
+*.ckpt
+*.safetensors
+*.mp3
+*.wav
+*.flac
+*.m4a
+*.ogg
+*.mp4
+*.mkv
+*.jpg
+*.jpeg
+*.png
+projects/
+
+# Windows install (created by windows/install.ps1)
+/.venv/
+/tools/
+/RVC/
+/models/
+/work/
+/voices/*
+!/voices/README.txt

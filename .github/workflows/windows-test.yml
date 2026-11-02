@@ -1,0 +1,91 @@
+# Installs the Windows package from scratch on a clean Windows runner (no GPU, so the CPU path) and renders a
+# short clip through the whole pipeline with a dummy voice. Run it by hand from the Actions tab, or by pushing
+# changes to the windows/ installer.
+name: Windows package test
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [windows]
+    paths: ["windows/**", "song-pipeline/**", "hankify/**", "*.bat", ".github/workflows/windows-test.yml"]
+
+jobs:
+  install-and-render:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install (same script as "Install Hankify.bat")
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File windows\install.ps1
+
+      - name: Make a dummy voice and a test song
+        run: |
+          $ErrorActionPreference = "Stop"
+          $env:PATH = "$PWD\tools\ffmpeg\bin;$env:PATH"
+          $env:HANKIFIER_CONFIG = "$PWD\config.json"
+          # build the dummy voice as a download would look (zip with a training checkpoint in it) and import it
+          New-Item -ItemType Directory -Force ci-voice\dl | Out-Null
+          .venv\Scripts\python.exe windows\ci\dummy_voice.py RVC "ci-voice\dl\CI Dummy.pth"
+          if ($LASTEXITCODE -ne 0) { throw "dummy voice failed" }
+          Set-Content ci-voice\dl\G_100.pth "not a voice"
+          Compress-Archive -Path ci-voice\dl\* -DestinationPath "ci-voice\CI Dummy.zip"
+          .venv\Scripts\python.exe song-pipeline\voice_import.py "ci-voice\CI Dummy.zip"
+          if ($LASTEXITCODE -ne 0) { throw "voice import failed" }
+          if (-not (Test-Path "RVC\assets\weights\CI Dummy.pth")) { throw "imported voice not in RVC\assets\weights" }
+          if (Test-Path "RVC\assets\weights\G_100.pth") { throw "training checkpoint was imported" }
+          New-Item -ItemType Directory -Force ci-in | Out-Null
+          # a non-ASCII, apostrophe'd name on purpose: Windows code pages are the usual way scripts like this break
+          # (built from char codes: PowerShell 5 reads this step's script file as ANSI, not UTF-8)
+          $name = "Test Song " + [char]0x2013 + " It's Caf" + [char]0xE9 + " (CI).mp3"
+          ffmpeg -v error -y -f lavfi -i "sine=frequency=220:duration=30" -f lavfi -i "anoisesrc=duration=30:amplitude=0.05" `
+            -filter_complex amix=inputs=2 -c:a libmp3lame -b:a 192k "ci-in\$name"
+          if ($LASTEXITCODE -ne 0) { throw "ffmpeg failed" }
+
+      - name: Render (plain, then preserve backing vocals)
+        run: |
+          $ErrorActionPreference = "Stop"
+          $env:PATH = "$PWD\tools\ffmpeg\bin;$env:PATH"
+          $env:HANKIFIER_CONFIG = "$PWD\config.json"
+          $env:PYTHONUTF8 = "1"
+          $song = (Get-ChildItem ci-in -Filter *.mp3 | Select-Object -First 1).FullName
+          .venv\Scripts\python.exe song-pipeline\pipeline.py $song --voice "CI Dummy.pth" --index-rate 0.95 --outdir ci-out --out-name "plain" --intermediates-dir ci-out\intermediates --keep-intermediates
+          if ($LASTEXITCODE -ne 0) { throw "plain render failed" }
+          .venv\Scripts\python.exe song-pipeline\pipeline.py $song --voice "CI Dummy.pth" --index-rate 0.95 --outdir ci-out --out-name "split" --split-backing-vocals
+          if ($LASTEXITCODE -ne 0) { throw "split render failed" }
+          # a second plain run must reuse the kept separation instead of separating again
+          $ErrorActionPreference = "Continue"     # PowerShell 5 turns redirected stderr lines into errors
+          $log = .venv\Scripts\python.exe song-pipeline\pipeline.py $song --voice "CI Dummy.pth" --outdir ci-out --out-name "cached" --intermediates-dir ci-out\intermediates 2>&1 | Out-String
+          Write-Host $log
+          if ($LASTEXITCODE -ne 0) { throw "cached render failed" }
+          if ($log -notmatch "Reusing cached separation") { throw "cached separation was not reused" }
+          foreach ($name in "plain", "split", "cached") {
+            $d = [double](ffprobe -v error -show_entries format=duration -of csv=p=0 "ci-out\$name.mp3")
+            Write-Host "$name.mp3: $d s"
+            if ($d -lt 28 -or $d -gt 32) { throw "$name.mp3 has the wrong length ($d s)" }
+          }
+
+      - name: Start the Hankify window (it must still be running after 20 s)
+        run: |
+          $env:PATH = "$PWD\tools\ffmpeg\bin;$env:PATH"
+          $env:HANKIFIER_CONFIG = "$PWD\config.json"
+          $env:PYTHONUTF8 = "1"
+          $p = Start-Process -FilePath ".venv\Scripts\python.exe" -ArgumentList "hankify\app.py" -PassThru `
+            -RedirectStandardError app-stderr.txt -RedirectStandardOutput app-stdout.txt
+          Start-Sleep 20
+          if ($p.HasExited) { Get-Content app-stderr.txt; throw "Hankify exited with code $($p.ExitCode)" }
+          Stop-Process -Id $p.Id -Force
+          Write-Host "Hankify window started fine"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: hankify-windows-test
+          path: |
+            ci-out/*.mp3
+            app-std*.txt
+            hankify/errors.log
+          if-no-files-found: ignore
