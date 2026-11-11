@@ -8,7 +8,14 @@ unzips it and double-clicks `Install Hankify.bat` (see `README - START HERE.txt`
 puts uv, Python 3.12, PyTorch, the pinned packages (`windows/requirements-windows.txt`), RVC-WebUI at the commit below with
 the patch pre-applied (`windows/rvc-overlay/`), ffmpeg and the models inside that folder, and uses
 [python-audio-separator](https://github.com/nomadkaraoke/python-audio-separator) (`"separator": "audio-separator"`) with
-the same two UVR models instead of a UVR checkout. Everything below is the Linux setup.
+the same two UVR models instead of a UVR checkout.
+
+**Linux, quick way:** `./install_linux.sh` does the same thing on Linux (one venv in this folder, uv + Python 3.12,
+PyTorch for your card or CPU, the pinned packages in `linux/requirements-linux.txt`, RVC-WebUI at the commit below with the
+same patched files as Windows, audio-separator instead of a UVR checkout, the models, and a `config.json` in this folder
+that `run_hankify.sh` / `run_hankiplier.sh` pick up). `--help` lists the options.
+
+Everything below is the **manual** Linux setup (advanced: two venvs, the real UVR5 GUI as the separator).
 
 Tested on: Linux (Arch), NVIDIA GTX 1650 4 GB, driver 615, Python 3.12 (RVC) and 3.10 (UVR), ffmpeg 9.
 Exact package lists from the working machine are in `reference/*-freeze.txt` (use them as a guide, not blindly:

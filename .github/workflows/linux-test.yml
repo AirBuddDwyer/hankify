@@ -1,0 +1,75 @@
+# Installs the Linux package from scratch on a clean Ubuntu runner (no GPU, so the CPU path) and renders a short
+# clip through the whole pipeline with a dummy voice. Run it by hand from the Actions tab, or by pushing changes to main.
+name: Linux package test
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["install_linux.sh", "linux/**", "windows/rvc-overlay/**", "windows/prefetch_models.py", "windows/selftest.py",
+            "song-pipeline/**", "hankify/**", "hankiplier/**", "run_*.sh", ".github/workflows/linux-test.yml"]
+
+jobs:
+  install-and-render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: System packages (what install_linux.sh asks for, plus a virtual display for the GUI check)
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg xvfb
+
+      - name: Install (same script users run)
+        run: ./install_linux.sh --cpu
+
+      - name: Make a dummy voice and a test song
+        run: |
+          set -euo pipefail
+          export HANKIFIER_CONFIG="$PWD/config.json"
+          # build the dummy voice as a download would look (zip with a training checkpoint in it) and import it
+          mkdir -p ci-voice/dl ci-in
+          .venv/bin/python windows/ci/dummy_voice.py RVC "ci-voice/dl/CI Dummy.pth"
+          echo "not a voice" > ci-voice/dl/G_100.pth
+          .venv/bin/python -c "import shutil; shutil.make_archive('ci-voice/CI Dummy', 'zip', 'ci-voice/dl')"
+          .venv/bin/python song-pipeline/voice_import.py "ci-voice/CI Dummy.zip"
+          test -f "RVC/assets/weights/CI Dummy.pth"
+          test ! -e RVC/assets/weights/G_100.pth
+          # a non-ASCII, apostrophe'd name on purpose
+          ffmpeg -v error -y -f lavfi -i "sine=frequency=220:duration=30" -f lavfi -i "anoisesrc=duration=30:amplitude=0.05" \
+            -filter_complex amix=inputs=2 -c:a libmp3lame -b:a 192k "ci-in/Test Song – It's Café (CI).mp3"
+
+      - name: Render (plain, preserve backing vocals, then cached)
+        run: |
+          set -euo pipefail
+          export HANKIFIER_CONFIG="$PWD/config.json"
+          song="$(ls ci-in/*.mp3 | head -1)"
+          .venv/bin/python song-pipeline/pipeline.py "$song" --voice "CI Dummy.pth" --index-rate 0.95 --outdir ci-out --out-name plain --intermediates-dir ci-out/intermediates --keep-intermediates
+          .venv/bin/python song-pipeline/pipeline.py "$song" --voice "CI Dummy.pth" --index-rate 0.95 --outdir ci-out --out-name split --split-backing-vocals
+          .venv/bin/python song-pipeline/pipeline.py "$song" --voice "CI Dummy.pth" --outdir ci-out --out-name cached --intermediates-dir ci-out/intermediates 2>&1 | tee cached.log
+          grep -q "Reusing cached separation" cached.log
+          for n in plain split cached; do
+            d="$(ffprobe -v error -show_entries format=duration -of csv=p=0 "ci-out/$n.mp3")"
+            echo "$n.mp3: $d s"
+            python3 -c "import sys; d=float('$d'); sys.exit(0 if 28 <= d <= 32 else 1)"
+          done
+
+      - name: Start both windows (each must still be running after 20 s)
+        run: |
+          for app in run_hankify.sh run_hankiplier.sh; do
+            xvfb-run -a ./"$app" > "$app.out" 2>&1 & pid=$!
+            sleep 20
+            if ! kill -0 "$pid" 2>/dev/null; then cat "$app.out"; echo "$app exited early"; exit 1; fi
+            pkill -P "$pid" || true; kill "$pid" 2>/dev/null || true
+            echo "$app started fine"
+          done
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: hankify-linux-test
+          path: |
+            ci-out/*.mp3
+            run_*.sh.out
+            hankify/errors.log
+            hankiplier/errors.log
+          if-no-files-found: ignore

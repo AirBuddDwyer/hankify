@@ -20,13 +20,24 @@ One song, up to 10 singers, each part in its own voice:
 Every cut can be reviewed and moved before rebuilding. A song's setup (lyrics, parts, casting, cuts; never audio) can be
 shared as a zip with **File > Export setup** or `python3 hankiplier/share.py export`, and imported by anyone with the same song.
 
-Run: `./run_hankiplier.sh`. Linux only for now: the Windows package does not include Hankiplier yet.
+Run: `./run_hankiplier.sh` (installed by `install_linux.sh` too). Linux only for now: the Windows package does not include Hankiplier yet.
+
+## Linux (quick install)
+```bash
+git clone https://github.com/AirBuddDwyer/hankify.git && cd hankify
+./install_linux.sh            # add --desktop for app-launcher entries; --cpu / --cuda 118|128 to force a PyTorch build
+./run_hankify.sh              # or ./run_hankiplier.sh for the multi-voice version
+```
+Everything (uv, Python 3.12, PyTorch, RVC, models) goes inside the folder, like the Windows install; the only system
+packages it needs are ffmpeg (with MP3 support), curl and tar, and it prints the install command for your distro if one
+is missing. It never runs sudo. Rerun it any time to repair or update. Voices: **Import Voice...** in the app, or drop the
+downloaded `.zip` files in `voices/` and run the installer again. The manual setup in [SETUP.md](SETUP.md) still works.
 
 ## Windows
 Download the repo (Code > Download ZIP), unzip it to `C:\Hankify`, and follow **[README - START HERE.txt](README%20-%20START%20HERE.txt)**: double-click `Install Hankify.bat`, then `Hankify.bat`. No voice models are included: find them on [voice-models.com](https://voice-models.com) (or google "<character> RVC model") and add the downloaded `.zip` with **Import Voice...** in the app. Full steps: GETTING VOICES in the START HERE file.
 
-## Setup
-See **[SETUP.md](SETUP.md)** for the full walkthrough: installing RVC-WebUI and UVR5 at pinned commits (with the small
+## Setup (manual, advanced)
+The quick install above is the easy way. **[SETUP.md](SETUP.md)** is the full manual walkthrough: installing RVC-WebUI and UVR5 at pinned commits (with the small
 patches in `patches/`), picking the UVR models, and writing `~/.config/hankifier/config.json`.
 Paths are configuration, not code: `python3 song-pipeline/hankify_config.py show` prints what is in effect.
 

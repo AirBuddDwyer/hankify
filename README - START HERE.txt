@@ -9,6 +9,7 @@ There is no .exe in here. Everything is plain-text scripts (.bat, .ps1, .py) you
 running. The installer downloads the actual programs from their official sources (listed at the top of
 windows\install.ps1) into this folder only: nothing is installed system-wide and no admin rights are needed.
 To uninstall, delete the folder.
+(On Linux, use ./install_linux.sh instead: see README.md, "Linux (quick install)".)
 
 
 WHAT YOU NEED
