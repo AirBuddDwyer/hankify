@@ -154,6 +154,7 @@ def main():
     parser.add_argument("--model", required=True, help="Model filename in assets/weights, e.g. My Voice.pth")
     parser.add_argument("--output", required=True, help="Path to write the converted vocal wav to")
     parser.add_argument("--f0-up-key", type=int, default=0)
+    parser.add_argument("--index", help="explicit .index path (e.g. another voice's index); default = the model's own")
     parser.add_argument("--f0-method", default="rmvpe", choices=["pm", "rmvpe", "fcpe"])
     parser.add_argument("--index-rate", type=float, default=0.75)
     parser.add_argument("--rms-mix-rate", type=float, default=0.25)
@@ -194,7 +195,10 @@ def main():
     # An index named exactly like the voice (what Hankify's "Import Voice" writes) wins; RVC's own matcher
     # goes by substring and newest file, so "Alice" could otherwise pick up "Alice Singing.index".
     exact = os.path.join(os.environ["outside_index_root"], os.path.splitext(args.model)[0] + ".index")
-    index_path = exact if _nonempty_index(exact) else get_index_path_from_model(args.model, 0)
+    if args.index:   # explicit override, e.g. to try one voice's model with another voice's index
+        index_path = os.path.abspath(args.index)
+    else:
+        index_path = exact if _nonempty_index(exact) else get_index_path_from_model(args.model, 0)
     if index_path:
         # An untrained/empty .index (0 vectors) makes RVC crash mid-conversion; convert without it instead.
         try:

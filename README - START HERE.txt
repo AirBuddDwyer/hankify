@@ -49,7 +49,7 @@ of them for free. Each one is a .pth file (the voice) and usually an .index file
 character), normally packed together in a .zip.
 
 1. FIND ONE. Google the character's name plus "RVC model", for example:
-       Hank Hill RVC model
+       <character name> RVC model
    The results almost always lead to  https://voice-models.com  (or click "Find Voices Online" in Hankify).
    On voice-models.com, type the character's name in the search box. You'll often get several versions of
    the same character. Pick one that:

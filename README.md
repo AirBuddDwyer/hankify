@@ -7,7 +7,20 @@ RVC voice conversion suite: drop in a song, pick a character voice, get the song
   (`rvc_stage.py`) -> vocal FX + ffmpeg mix (`combine_stage.py`, presets in `vocal_presets.json`).
   Run directly with `python3 pipeline.py <song> --voice <model.pth>`.
 
+- `hankiplier/`: **Hankiplier**, the multi-voice version (see below).
+
 Mastering chapter (the default "new way" mixer, combine_new.py, and the old preset chain): [docs/Mastering.md](docs/Mastering.md).
+
+## Hankiplier (several voices in one song)
+One song, up to 10 singers, each part in its own voice:
+1. drag a song in and paste its Genius URL (or the lyrics with `[Verse 1: Artist]` headers);
+2. it reads the parts (who sings which section and ad-lib) from the lyrics;
+3. cast each performer to an RVC voice (pitch and "keep backing" per singer);
+4. it renders each voice, finds the cut points (Whisper word timings + a per-singer voice match) and builds the song.
+Every cut can be reviewed and moved before rebuilding. A song's setup (lyrics, parts, casting, cuts; never audio) can be
+shared as a zip with **File > Export setup** or `python3 hankiplier/share.py export`, and imported by anyone with the same song.
+
+Run: `./run_hankiplier.sh`. Linux only for now: the Windows package does not include Hankiplier yet.
 
 ## Windows
 Download the repo (Code > Download ZIP), unzip it to `C:\Hankify`, and follow **[README - START HERE.txt](README%20-%20START%20HERE.txt)**: double-click `Install Hankify.bat`, then `Hankify.bat`. No voice models are included: find them on [voice-models.com](https://voice-models.com) (or google "<character> RVC model") and add the downloaded `.zip` with **Import Voice...** in the app. Full steps: GETTING VOICES in the START HERE file.
@@ -17,7 +30,7 @@ See **[SETUP.md](SETUP.md)** for the full walkthrough: installing RVC-WebUI and 
 patches in `patches/`), picking the UVR models, and writing `~/.config/hankifier/config.json`.
 Paths are configuration, not code: `python3 song-pipeline/hankify_config.py show` prints what is in effect.
 
-Run: `./run_hankify.sh` (GUI) or `python3 song-pipeline/pipeline.py song.mp3 --voice "Model.pth"` (CLI).
+Run: `./run_hankify.sh` (GUI), `./run_hankiplier.sh` (multi-voice GUI) or `python3 song-pipeline/pipeline.py song.mp3 --voice "Model.pth"` (CLI).
 
 ## Open problems
 - **Pitch shifting (transpose) and index rate.** Shifting pitch for parts outside a character's range (e.g. a female vocal
@@ -32,6 +45,7 @@ Hankifier is glue code around these open-source projects, which are installed se
 - [RVC](https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI): voice conversion, with RMVPE pitch tracking.
 - [FFmpeg](https://ffmpeg.org/): mixing, loudness and MP3/MP4 export.
 - [tkinterdnd2](https://github.com/Eliav2/tkinterdnd2) and [Pillow](https://python-pillow.org/): GUI.
+- [Whisper](https://github.com/openai/whisper) and [scikit-learn](https://scikit-learn.org/): Hankiplier's word timings and singer matching.
 
 The modified RVC files in `windows/rvc-overlay/` and the patches keep their upstream notices: see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 

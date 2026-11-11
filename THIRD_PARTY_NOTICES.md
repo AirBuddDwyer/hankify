@@ -36,6 +36,11 @@ SOFTWARE.
 `patches/uvr.patch` modifies UVR (Linux setup only). UVR is MIT-licensed; its copyright notice is in its
 LICENSE file: https://github.com/Anjok07/ultimatevocalremovergui/blob/master/LICENSE
 
+## Used by Hankiplier, installed separately
+Hankiplier's engine imports [OpenAI Whisper](https://github.com/openai/whisper) (MIT) and
+[scikit-learn](https://github.com/scikit-learn/scikit-learn) (BSD-3-Clause), plus librosa (ISC) and SciPy (BSD-3-Clause),
+installed into the RVC venv by the user. None of their code is copied into this repo.
+
 ## Downloaded at install time, not distributed here
 The Windows installer downloads these from their official sources, under their own licenses: uv, Python, PyTorch,
 the Python packages in `windows/requirements-windows.txt` (including python-audio-separator and

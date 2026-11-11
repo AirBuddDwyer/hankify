@@ -95,7 +95,7 @@ python3 song-pipeline/hankify_config.py show     # prints what everything resolv
 | `runs_dir` | `~/.cache/hankifier/pipeline_runs` | per-run scratch (stems); deleted after a run unless "keep intermediates" |
 | `intermediates_dir` | `<output_dir>/intermediates` | kept stems (Hankiplier reads these) |
 | `fallback_image` | none | still used for MP4s when you pick no image |
-| `hankifier_dir` | sibling `hankifier` | only for Hankiplier, if the repos are not side by side |
+| `hankifier_dir` | the repo root | only for Hankiplier, if it is run from somewhere other than this repo's `hankiplier/` folder |
 
 ## 5. Run it
 ```bash
@@ -104,11 +104,26 @@ python3 song-pipeline/pipeline.py "song.mp3" --voice "My Voice.pth"      # or th
 ```
 `desktop/hankify.desktop.template` is a launcher entry (replace `@REPO@` with the repo path).
 
+### Hankiplier (multi-voice)
+```bash
+./run_hankiplier.sh                   # the multi-voice GUI
+```
+It runs in the UVR venv like Hankify (tkinterdnd2, Pillow); its engine (`hankiplier/engine.py`: Whisper word timings,
+singer matching, cut building) runs in the RVC venv, which needs the extras from step 2 (`openai-whisper librosa
+scikit-learn scipy`). Projects are saved in `hankiplier/projects/` (git-ignored). It reads the kept stems from
+`intermediates_dir`. `desktop/hankiplier.desktop.template` is its launcher entry. The Windows package does not include
+Hankiplier yet. Env vars: `HANKIPLIER_LANG=es` (or another Whisper language code) for songs not in English,
+`HANKIPLIER_CPU=1` to keep the analysis off the GPU.
+
 ## Notes
 - **4 GB VRAM is enough** but only one GPU job at a time; the pipeline kills leftover UVR/RVC processes between stages.
 - Defaults that matter (UVR settings above, RVC pitch 0, index rate ~0.95) are explained in
   `docs/Hankify - How It Works.pdf`.
 - Settings and logs (`hankify/config.json`, `errors.log`) are created at runtime and git-ignored.
+- **De-esser.** The new-way mixer (`combine_new.py`) uses ffmpeg's `deesser` filter. An optional split-band de-esser
+  module can be plugged in by pointing env `RVC_DEESSER_PATH` at a folder with a `deesser.py` exposing `Settings` and
+  `process`; without it (the normal case) the ffmpeg filter is used automatically. `--deesser ffmpeg` (or env
+  `VOCAL_DEESSER=ffmpeg`) forces the filter.
 - **Waves Vocal Rider is optional.** Without it, both mixers use the built-in rider (`song-pipeline/vocal_rider.py`,
   numpy/soundfile from the RVC venv) automatically; nothing to configure. The Waves path is only used when
   `~/.local/share/vocal-rider-host/.venv/bin/python` exists (a venv with `pedalboard`) and the Waves plugin is loadable

@@ -74,6 +74,31 @@ def band_rms(y, sr, mask, hop):
     return float(np.sqrt(np.mean(fr[:n][mask[:n]] ** 2)))
 
 
+def rvc_deesser_available():
+    """True if an optional split-band de-esser module ("deesser", folder given by env RVC_DEESSER_PATH) imports.
+    It isn't part of this repo; without it the ffmpeg deesser filter is used."""
+    path = os.environ.get("RVC_DEESSER_PATH")
+    if not path:
+        return False
+    sys.path.insert(0, os.path.expanduser(path))
+    try:
+        import deesser  # noqa: F401
+        return True
+    except ImportError as e:
+        print(f"combine_new: rvc-deesser unavailable ({e}), using ffmpeg's deesser", file=sys.stderr)
+        return False
+
+
+def rvc_deess(path):
+    """Replace a mono float WAV with the rvc-deesser split-band version; threshold calibrated on this vocal."""
+    from deesser import Settings, process
+    y, sr = sf.read(path, dtype="float64")
+    r = process(y, sr, Settings(mode="split"))
+    sf.write(path, r.audio, sr, subtype="FLOAT")
+    return {"threshold_db": round(float(r.threshold_db), 1), "max_cut_db": round(float(r.reduction_db.max()), 1),
+            "active_pct": round(float((r.reduction_db > 0.5).mean() * 100), 1)}
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--vocals", required=True)
@@ -82,13 +107,16 @@ def main():
     ap.add_argument("--original", help="the original song (tonal-match reference; default: the sum of the stems)")
     ap.add_argument("--backing", help="original backing-vocal stem, mixed in untouched (stereo)")
     ap.add_argument("--backing-ref", help="original backing stem: level-match --backing to it (300 Hz-3 kHz band) "
-                                          "when --backing is a converted replacement, e.g. Gary")
+                                          "when --backing is a converted replacement (a backing voice)")
     ap.add_argument("--output", required=True)
     ap.add_argument("--space", type=float, default=10.0, help="plate send %% (delay at 60%% of it); 0 = dry")
     ap.add_argument("--target-lufs", type=float, default=-11.0)
     ap.add_argument("--duck-db", type=float, default=1.5)
     ap.add_argument("--vocal-gain-db", type=float, default=0.0, help="added on top of the band level match")
     ap.add_argument("--stereo-extra", help="stereo track summed into the mix as-is")
+    ap.add_argument("--deesser", choices=["ffmpeg", "rvc"], default=os.environ.get("VOCAL_DEESSER", "rvc"),
+                    help="rvc (default) = optional split-band de-esser from env RVC_DEESSER_PATH, falling back to ffmpeg "
+                         "when it isn't installed; ffmpeg = ffmpeg's deesser filter (or env VOCAL_DEESSER)")
     ap.add_argument("--artist"); ap.add_argument("--title"); ap.add_argument("--original-artist")
     a = ap.parse_args()
     sr = sf.info(a.instrumental).samplerate
@@ -103,8 +131,12 @@ def main():
         p = os.path.join(tmp, "v0.wav"); sf.write(p, v * g, sr, subtype="FLOAT")
         # 2. corrective EQ + de-esser (before the rider, per the guide)
         q = os.path.join(tmp, "v1.wav")
-        ff(["-i", p, "-af", "highpass=f=80:poles=2,equalizer=f=280:t=q:w=1.0:g=-2,"
-            "deesser=i=0.4:m=0.4:f=0.5", "-c:a", "pcm_f32le", q], "eq/de-esser")
+        if a.deesser == "rvc" and rvc_deesser_available():
+            ff(["-i", p, "-af", "highpass=f=80:poles=2,equalizer=f=280:t=q:w=1.0:g=-2", "-c:a", "pcm_f32le", q], "eq")
+            rep["deesser"] = rvc_deess(q)
+        else:
+            ff(["-i", p, "-af", "highpass=f=80:poles=2,equalizer=f=280:t=q:w=1.0:g=-2,"
+                "deesser=i=0.4:m=0.4:f=0.5", "-c:a", "pcm_f32le", q], "eq/de-esser")
         # 3. Waves Vocal Rider, gentle range (native rider if the Waves host fails)
         rdn = os.path.join(tmp, "v2.wav")
         ok = False

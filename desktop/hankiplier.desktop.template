@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Name=Hankiplier
+Comment=One song, several singers: give each part its own voice
+Exec=@REPO@/run_hankiplier.sh
+Path=@REPO@/hankiplier
+Terminal=false
+Type=Application
+Categories=AudioVideo;Audio;
+StartupNotify=true
