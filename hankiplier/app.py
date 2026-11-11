@@ -46,6 +46,9 @@ hk.ERROR_LOG_PATH = os.path.join(HERE, "errors.log")  # hk.log_error writes here
 RVC_PY = cfg.RVC_PYTHON
 ENGINE = os.path.join(HERE, "engine.py")
 PIPELINE_SCRIPT = hk.PIPELINE_SCRIPT
+# The song pipeline runs under the same interpreter choice Hankify makes: on Windows the package has one venv for
+# everything (this one); on Linux the pipeline is started with the system python3, which then picks each stage's venv.
+PIPELINE_PY = sys.executable if os.name == "nt" else "python3"
 INTERMEDIATES_DIR = cfg.INTERMEDIATES_DIR
 PROJECTS_DIR = os.path.join(HERE, "projects")
 CONFIG_PATH = os.path.join(HERE, "config.json")
@@ -896,7 +899,7 @@ class App(TkinterDnD.Tk):
         only, no converted vocal), so the pipeline reuses the name."""
         if not os.path.isdir(d) or os.path.exists(os.path.join(d, f"{name}_(Converted Vocals).wav")):
             return
-        allowed = re.compile(r"(1_.*_\((Vocals|Instrumental|Vocals_lead_only|Vocals_backing_only)\)\.wav"
+        allowed = re.compile(r"([12]_.*_\((Vocals|Instrumental|Vocals_lead_only|Vocals_backing_only)\)\.wav"
                              r"|source\.json)$")
         files = os.listdir(d)
         if all(allowed.match(f) for f in files):
@@ -1009,7 +1012,7 @@ class App(TkinterDnD.Tk):
             extra = " (lead only - splitting backing vocals on the CPU first, ~8 min)" if bv else ""
             self.status(f"Rendering voice {i + 1}/{len(todo)}: {voice_label(v)}{extra}…")
             self._clear_incomplete(d, name)
-            cmd = ["python3", PIPELINE_SCRIPT, self.song, "--voice", v, "--f0-up-key", str(p),
+            cmd = [PIPELINE_PY, PIPELINE_SCRIPT, self.song, "--voice", v, "--f0-up-key", str(p),
                    "--index-rate", str(self.index_rate if not p else min(self.index_rate, 0.2)),
                    "--keep-intermediates", "--intermediates-dir", INTERMEDIATES_DIR,
                    "--outdir", render_dir, "--out-name", name] + (["--split-backing-vocals"] if bv else [])
@@ -1053,7 +1056,7 @@ class App(TkinterDnD.Tk):
         if not os.path.isfile(out):
             self.status(f"Rendering the backing vocals as {voice_label(v)}…")
             os.makedirs(d, exist_ok=True)
-            self.run_cmd(["python3", PIPELINE_SCRIPT, stems["backing"], "--skip-stemming", "--voice", v,
+            self.run_cmd([PIPELINE_PY, PIPELINE_SCRIPT, stems["backing"], "--skip-stemming", "--voice", v,
                           "--f0-up-key", "0", "--index-rate", str(self.index_rate),
                           "--outdir", d, "--out-name", name], f"render backing as {voice_label(v)}")
             if not os.path.isfile(out):
@@ -1131,13 +1134,22 @@ class App(TkinterDnD.Tk):
         self._refresh_tree()
         self.hankiply()
 
+    @staticmethod
+    def _open_path(path):
+        """Open a file or folder with the desktop's default app."""
+        if os.name == "nt":
+            os.startfile(path)  # noqa: S606 - Windows' own "open with default app"
+        else:
+            subprocess.Popen(["xdg-open", path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
     def play_output(self):
         out = self.proj.get("last_output")
         if out and os.path.exists(out):
-            subprocess.Popen(["xdg-open", out], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self._open_path(out)
 
     def open_folder(self):
-        subprocess.Popen(["xdg-open", self.output_dir], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        os.makedirs(self.output_dir, exist_ok=True)
+        self._open_path(self.output_dir)
 
     def on_close(self):
         if self.busy() and not messagebox.askyesno("Hankiplier", "A job is running - stop it and quit?"):

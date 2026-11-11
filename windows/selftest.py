@@ -1,4 +1,4 @@
-"""Quick post-install check: every piece Hankify needs imports and is where the config says.
+"""Quick post-install check: every piece Hankify and Hankiplier need imports and is where the config says.
 Prints one line per check and exits non-zero if any fail. Doesn't render anything."""
 import os
 import shutil
@@ -66,6 +66,19 @@ def gui():
     import PIL  # noqa: F401
 
 
+def multivoice():
+    """Hankiplier's extra pieces: Whisper (lyrics timing) and scikit-learn (telling the singers apart)."""
+    import sklearn  # noqa: F401
+    import whisper
+    d = os.environ.get("HANKIPLIER_WHISPER_DIR")
+    if d:
+        size = os.environ.get("HANKIPLIER_WHISPER_MODEL", "small")
+        if not os.path.isfile(os.path.join(d, os.path.basename(whisper._MODELS[size]))):
+            raise RuntimeError(f"Whisper {size} model missing in {d}")
+        return f"Whisper {size} ready"
+    return "Whisper downloads its model the first time cuts are detected"
+
+
 def voices():
     names = [f for f in os.listdir(cfg.RVC_WEIGHTS_DIR) if f.lower().endswith(".pth")]
     if not names:
@@ -78,5 +91,6 @@ check("ffmpeg", tools)
 check("RVC voice conversion", rvc)
 check("vocal separation", separator)
 check("window + drag and drop", gui)
+check("multi-voice (Hankiplier)", multivoice)
 check("voices", voices)
 sys.exit(1 if failed else 0)

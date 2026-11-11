@@ -20,7 +20,7 @@ One song, up to 10 singers, each part in its own voice:
 Every cut can be reviewed and moved before rebuilding. A song's setup (lyrics, parts, casting, cuts; never audio) can be
 shared as a zip with **File > Export setup** or `python3 hankiplier/share.py export`, and imported by anyone with the same song.
 
-Run: `./run_hankiplier.sh` (installed by `install_linux.sh` too). Linux only for now: the Windows package does not include Hankiplier yet.
+Run: `./run_hankiplier.sh` on Linux (installed by `install_linux.sh` too), or double-click `Hankiplier.bat` in the Windows package.
 
 ## Linux (quick install)
 ```bash

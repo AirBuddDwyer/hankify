@@ -118,9 +118,11 @@ python3 song-pipeline/pipeline.py "song.mp3" --voice "My Voice.pth"      # or th
 It runs in the UVR venv like Hankify (tkinterdnd2, Pillow); its engine (`hankiplier/engine.py`: Whisper word timings,
 singer matching, cut building) runs in the RVC venv, which needs the extras from step 2 (`openai-whisper librosa
 scikit-learn scipy`). Projects are saved in `hankiplier/projects/` (git-ignored). It reads the kept stems from
-`intermediates_dir`. `desktop/hankiplier.desktop.template` is its launcher entry. The Windows package does not include
-Hankiplier yet. Env vars: `HANKIPLIER_LANG=es` (or another Whisper language code) for songs not in English,
-`HANKIPLIER_CPU=1` to keep the analysis off the GPU.
+`intermediates_dir`. `desktop/hankiplier.desktop.template` is its launcher entry. On Windows the package installs it too
+(`Hankiplier.bat`; one venv runs the window, the engine and the pipeline, and Whisper's model is downloaded at install time
+into `models\whisper`). Env vars: `HANKIPLIER_LANG=es` (or another Whisper language code) for songs not in English,
+`HANKIPLIER_CPU=1` to keep the analysis off the GPU, `HANKIPLIER_WHISPER_MODEL` (default `small`) and
+`HANKIPLIER_WHISPER_DIR` (where the Whisper model lives; unset = Whisper's own `~/.cache/whisper`, downloaded on first use).
 
 ## Notes
 - **4 GB VRAM is enough** but only one GPU job at a time; the pipeline kills leftover UVR/RVC processes between stages.

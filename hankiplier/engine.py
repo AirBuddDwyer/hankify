@@ -78,8 +78,12 @@ def transcribe(pdir, vocals):
         free, _ = torch.cuda.mem_get_info()
         if free > 2.6e9:
             device = "cuda"
-    log(f"Transcribing vocals with Whisper small on {device} (a few minutes on CPU)...")
-    m = whisper.load_model("small", device=device)
+    # HANKIPLIER_WHISPER_MODEL: model size (default "small"; the CI uses "tiny" to stay fast on CPU).
+    # HANKIPLIER_WHISPER_DIR: where the model file lives (the Windows package keeps it inside its folder);
+    # unset = Whisper's own default cache (~/.cache/whisper).
+    size = os.environ.get("HANKIPLIER_WHISPER_MODEL", "small")
+    log(f"Transcribing vocals with Whisper {size} on {device} (a few minutes on CPU)...")
+    m = whisper.load_model(size, device=device, download_root=os.environ.get("HANKIPLIER_WHISPER_DIR") or None)
     # HANKIPLIER_LANG: songs not in English (e.g. "es" for Despacito) - with "en" Whisper
     # translates instead of transcribing, and the Genius alignment falls apart.
     r = m.transcribe(vocals, word_timestamps=True, language=os.environ.get("HANKIPLIER_LANG", "en"))
@@ -355,7 +359,7 @@ def analyze(pdir):
     if warnings:
         with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "warnings.log"), "a") as f:
             for w in warnings:
-                f.write(f"{os.path.basename(pdir.rstrip('/'))}: {w}\n")
+                f.write(f"{os.path.basename(os.path.normpath(pdir))}: {w}\n")
     log("Training a voice model per performer:")
     L = train_models(F, db, lines, times)
 
@@ -644,7 +648,7 @@ def build(pdir):
          proj.get("song", "")], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
     ).stdout.strip() or proj.get("artist", "")
     log("Mixing with the instrumental...")
-    subprocess.run(["python3", os.path.join(PIPELINE_DIR, "combine_stage.py"),
+    subprocess.run([sys.executable if os.name == "nt" else "python3", os.path.join(PIPELINE_DIR, "combine_stage.py"),
                     "--vocals", spliced, "--instrumental", proj["stems"]["instrumental"],
                     "--reference-vocals", ref_vocals, "--original", proj.get("song", ""),
                     "--output", out, "--artist", artist, "--title", proj.get("title") or proj["name"]]

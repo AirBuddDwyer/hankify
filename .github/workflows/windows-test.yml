@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths: ["windows/**", "song-pipeline/**", "hankify/**", "*.bat", ".github/workflows/windows-test.yml"]
+    paths: ["windows/**", "song-pipeline/**", "hankify/**", "hankiplier/**", "*.bat", ".github/workflows/windows-test.yml"]
 
 jobs:
   install-and-render:
@@ -80,6 +80,55 @@ jobs:
           Stop-Process -Id $p.Id -Force
           Write-Host "Hankify window started fine"
 
+      - name: Start the Hankiplier window (it must still be running after 20 s)
+        run: |
+          $env:PATH = "$PWD\tools\ffmpeg\bin;$env:PATH"
+          $env:HANKIFIER_CONFIG = "$PWD\config.json"
+          $env:HANKIPLIER_WHISPER_DIR = "$PWD\models\whisper"
+          $env:PYTHONUTF8 = "1"
+          $p = Start-Process -FilePath ".venv\Scripts\python.exe" -ArgumentList "hankiplier\app.py" -PassThru `
+            -RedirectStandardError hkp-stderr.txt -RedirectStandardOutput hkp-stdout.txt
+          Start-Sleep 20
+          if ($p.HasExited) { Get-Content hkp-stderr.txt; throw "Hankiplier exited with code $($p.ExitCode)" }
+          Stop-Process -Id $p.Id -Force
+          Write-Host "Hankiplier window started fine"
+
+      - name: Make a spoken two-singer test song (Windows text-to-speech)
+        run: |
+          $ErrorActionPreference = "Stop"
+          $env:PATH = "$PWD\tools\ffmpeg\bin;$env:PATH"
+          New-Item -ItemType Directory -Force ci-hkp | Out-Null
+          $a = "Hi, this is a test of the multi voice tool. I am reading a few lines so it can learn how I sound."
+          $b = "Four friendly zebras quickly jumped over the big yellow van. Type a sentence, click once, and get a song."
+          Set-Content ci-hkp\lyrics.txt -Encoding ASCII -Value @("[Verse 1: Singer A]", $a, "", "[Verse 2: Singer B]", $b)
+          Add-Type -AssemblyName System.Speech
+          $tts = New-Object System.Speech.Synthesis.SpeechSynthesizer
+          Write-Host "voices: $(($tts.GetInstalledVoices() | ForEach-Object { $_.VoiceInfo.Name }) -join ', ')"
+          $tts.Rate = -1
+          $tts.SetOutputToWaveFile("$PWD\ci-hkp\speech.wav")
+          $tts.Speak("$a $b"); $tts.Dispose()
+          ffmpeg -v error -y -i ci-hkp\speech.wav -ar 44100 -ac 2 ci-hkp\vocals.wav
+          if ($LASTEXITCODE -ne 0) { throw "ffmpeg (vocals) failed" }
+          $d = [double](ffprobe -v error -show_entries format=duration -of csv=p=0 ci-hkp\vocals.wav)
+          ffmpeg -v error -y -f lavfi -i "sine=frequency=110:duration=$d" -f lavfi -i "anoisesrc=duration=$($d):amplitude=0.03" `
+            -filter_complex "amix=inputs=2,volume=0.5" -ar 44100 -ac 2 ci-hkp\inst.wav
+          if ($LASTEXITCODE -ne 0) { throw "ffmpeg (instrumental) failed" }
+          Copy-Item "RVC\assets\weights\CI Dummy.pth" "RVC\assets\weights\CI Dummy B.pth"
+          Write-Host "test song: $d s"
+
+      - name: Hankiplier job, headless (convert two voices, Whisper tiny cuts, build)
+        run: |
+          $ErrorActionPreference = "Continue"     # PowerShell 5 turns redirected stderr lines into errors
+          $env:PATH = "$PWD\tools\ffmpeg\bin;$env:PATH"
+          $env:HANKIFIER_CONFIG = "$PWD\config.json"
+          $env:HANKIPLIER_WHISPER_DIR = "$PWD\models\whisper"
+          $env:HANKIPLIER_WHISPER_MODEL = "tiny"
+          $env:PYTHONUTF8 = "1"
+          .venv\Scripts\python.exe windows\ci\hankiplier_job.py --vocals ci-hkp\vocals.wav --instrumental ci-hkp\inst.wav `
+            --lyrics ci-hkp\lyrics.txt --default "Singer A" --cast "Singer A=CI Dummy.pth" --cast "Singer B=CI Dummy B.pth" `
+            --work ci-hkp\work --out "ci-out\multi-voice.mp3"
+          if ($LASTEXITCODE -ne 0) { throw "Hankiplier job failed (see above)" }
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -87,5 +136,8 @@ jobs:
           path: |
             ci-out/*.mp3
             app-std*.txt
+            hkp-std*.txt
             hankify/errors.log
+            hankiplier/errors.log
+            ci-hkp/work/project/plan.json
           if-no-files-found: ignore

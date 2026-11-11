@@ -21,3 +21,5 @@ audio-separator
 tkinterdnd2
 Pillow
 huggingface_hub
+# Hankiplier (multi-voice): Whisper word timestamps for lining the lyrics up with the recording
+openai-whisper

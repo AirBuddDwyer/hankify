@@ -43,6 +43,10 @@ Tips
 - "Preserve backing vocals (convert lead only)" converts only the lead singer and keeps the original backup singers.
 - The first song after starting is a bit slower (models loading).
 
+SEVERAL VOICES IN ONE SONG (Hankiplier)
+Double-click  "Hankiplier.bat". Drop in one song, paste its lyrics (or a Genius link), give each singer a voice,
+press Hankiply!. It works out who sings which line and builds one song with every part in its own voice.
+
 
 GETTING VOICES (do this first: Hankify comes with NO voices)
 A "voice" is an RVC voice model someone trained on a character's or singer's recordings. People share thousands

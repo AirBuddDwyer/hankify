@@ -1,6 +1,7 @@
 """Download the models Hankify needs once, at install time, so the first song doesn't stall:
-RVC's HuBERT + RMVPE base models (from RVC's official Hugging Face repo) and the two UVR
-separation models audio-separator uses. Skips anything already present.
+RVC's HuBERT + RMVPE base models (from RVC's official Hugging Face repo), the two UVR
+separation models audio-separator uses and, when HANKIPLIER_WHISPER_DIR is set (the Windows package),
+the Whisper "small" model Hankiplier lines lyrics up with. Skips anything already present.
 
 Run with the install's venv python and HANKIFIER_CONFIG pointing at its config.json.
 """
@@ -34,6 +35,16 @@ def main():
     for model in (uvr_stage.SEPARATOR_MAIN_MODEL, uvr_stage.SEPARATOR_SPLIT_MODEL):
         print(f"    {model}", flush=True)
         sep.load_model(model_filename=model)     # downloads it the first time
+
+    # Hankiplier's Whisper model: only where the installer keeps it in its own folder (Windows). Elsewhere Whisper
+    # downloads it to its usual cache the first time Hankiplier detects cuts.
+    whisper_dir = os.environ.get("HANKIPLIER_WHISPER_DIR")
+    if whisper_dir:
+        import whisper
+        size = os.environ.get("HANKIPLIER_WHISPER_MODEL", "small")
+        os.makedirs(whisper_dir, exist_ok=True)
+        print(f"    Whisper {size} (for Hankiplier)", flush=True)
+        whisper._download(whisper._MODELS[size], whisper_dir, False)   # checks the SHA256; skips a good copy
 
 
 if __name__ == "__main__":

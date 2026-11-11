@@ -5,7 +5,8 @@
 # What it downloads, all from the projects' official sources:
 #   uv (Python/package manager, github.com/astral-sh/uv), Python 3.12 (via uv), PyTorch (pytorch.org),
 #   the pinned Python packages (pypi.org), RVC-WebUI at a pinned commit (github.com/RVC-Project),
-#   RVC's base models + the two UVR separation models (huggingface.co / github.com),
+#   RVC's base models + the two UVR separation models (huggingface.co / github.com), Whisper "small" for
+#   Hankiplier (openaipublic.azureedge.net, the URL the openai-whisper package itself uses),
 #   ffmpeg (gyan.dev builds, linked from ffmpeg.org) if it isn't already installed.
 
 $ErrorActionPreference = "Stop"
@@ -144,9 +145,11 @@ if (-not (Test-Path $ConfigPath)) {
     [IO.File]::WriteAllText($ConfigPath, ($Config | ConvertTo-Json), (New-Object Text.UTF8Encoding $false))
 }
 $env:HANKIFIER_CONFIG = $ConfigPath
+# Hankiplier's Whisper model stays inside this folder too (Hankiplier.bat sets the same variable).
+$env:HANKIPLIER_WHISPER_DIR = Join-Path $Root "models\whisper"
 
 # --- 6. Models + voices ----------------------------------------------------------------------------------
-Step "Downloading the RVC base models and the vocal separation models"
+Step "Downloading the RVC base models, the vocal separation models and Whisper (for Hankiplier)"
 & $Py -I (Join-Path $Root "windows\prefetch_models.py")
 if ($LASTEXITCODE -ne 0) { throw "model download failed" }
 
@@ -161,4 +164,5 @@ if ($LASTEXITCODE -ne 0) { throw "self-test failed (see above)" }
 
 Write-Host ""
 Write-Host "All done. Start it with Hankify.bat (add voices there with Import Voice...)." -ForegroundColor Green
+Write-Host "Multi-voice songs (one song, several singers): Hankiplier.bat."
 Write-Host "Finished songs go to: $OutDir"
